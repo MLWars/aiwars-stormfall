@@ -1,0 +1,122 @@
+/* AIWars POC kit — shared chrome. Mirrors the site's dark/emerald/cyan tokens so
+   the demos feel native (see web/app/src/index.css @theme). */
+:root {
+  --base: #07080d;
+  --surface: #0f1118;
+  --surface-2: #161a24;
+  --elevated: #1c2230;
+  --border: #ffffff14;
+  --border-strong: #ffffff2e;
+  --ink: #e9ecf5;
+  --muted: #9aa2b6;
+  --faint: #626a80;
+  --brand: #22d3ee;
+  --win: #34d399;
+  --danger: #fb5d5d;
+  --accent: #a855f7;
+  --A: #10b981;
+  --A-soft: #5eead4;
+  --B: #8b5cf6;
+  --B-soft: #c4b5fd;
+  --mono: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, "DejaVu Sans", -apple-system, Segoe UI, Roboto, sans-serif;
+  --r: 14px;
+  --r-sm: 9px;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: radial-gradient(1200px 700px at 50% -10%, #11131d 0%, var(--base) 60%);
+  color: var(--ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.aw-wrap { max-width: 1240px; margin: 0 auto; padding: 22px 22px 40px; }
+
+.aw-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.aw-title { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+.aw-title .dot { color: var(--brand); }
+.aw-tag { color: var(--muted); font-size: 13px; margin-top: 4px; max-width: 720px; line-height: 1.5; }
+.aw-meta { display: flex; align-items: center; gap: 10px; }
+.aw-seed { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+.aw-badge {
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border-strong);
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.aw-badge.live { color: var(--win); border-color: #34d39955; background: #34d39914; }
+.aw-badge.final { color: var(--muted); }
+.aw-badge .pulse { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 0 currentColor; animation: awpulse 1.6s infinite; }
+@keyframes awpulse { 0% { box-shadow: 0 0 0 0 #34d39988; } 70% { box-shadow: 0 0 0 7px #34d39900; } 100% { box-shadow: 0 0 0 0 #34d39900; } }
+@media (prefers-reduced-motion: reduce) { .aw-badge .pulse { animation: none; } }
+
+.aw-stage { display: grid; grid-template-columns: 1fr 372px; gap: 16px; align-items: start; }
+@media (max-width: 1080px) { .aw-stage { grid-template-columns: 1fr; } }
+
+.aw-left { min-width: 0; }
+.aw-canvas-shell { position: relative; border-radius: var(--r); overflow: hidden; border: 1px solid var(--border); box-shadow: 0 24px 60px -28px #000, inset 0 1px 0 #ffffff0a; }
+canvas.aw-canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+
+.aw-controls {
+  display: flex; align-items: center; gap: 8px; margin-top: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 9px 11px;
+}
+.aw-btn {
+  font-family: var(--sans); font-size: 13px; font-weight: 650; color: var(--ink);
+  background: var(--elevated); border: 1px solid var(--border-strong); border-radius: 8px;
+  padding: 7px 12px; cursor: pointer; transition: background .12s, border-color .12s;
+}
+.aw-btn:hover { background: #232b3d; }
+.aw-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.aw-btn.primary { background: var(--brand); color: #032027; border-color: transparent; }
+.aw-spacer { flex: 1; }
+.aw-speed { display: inline-flex; gap: 4px; background: var(--base); border: 1px solid var(--border); border-radius: 8px; padding: 3px; }
+.aw-speed button { font-family: var(--mono); font-size: 12px; color: var(--muted); background: transparent; border: 0; padding: 5px 9px; border-radius: 6px; cursor: pointer; }
+.aw-speed button.on { background: var(--elevated); color: var(--ink); }
+
+aside.aw-panel { display: flex; flex-direction: column; gap: 12px; }
+.aw-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 13px 14px; }
+.aw-card h3 { margin: 0 0 9px; font-size: 11px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); display: flex; align-items: center; gap: 7px; }
+.aw-card h3 .ic { color: var(--brand); }
+
+.aw-prompt { border-left: 3px solid var(--A); padding: 7px 10px; border-radius: 0 8px 8px 0; background: #ffffff05; margin-bottom: 9px; }
+.aw-prompt:last-child { margin-bottom: 0; }
+.aw-prompt.B { border-left-color: var(--B); }
+.aw-prompt .who { font-size: 11px; font-weight: 750; letter-spacing: .03em; margin-bottom: 3px; }
+.aw-prompt.A .who { color: var(--A-soft); }
+.aw-prompt.B .who { color: var(--B-soft); }
+.aw-prompt .txt { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.aw-prompt .txt b { color: var(--ink); font-weight: 700; }
+
+.aw-tool { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+.aw-tool:last-child { border-bottom: 0; }
+.aw-tool .nm { color: var(--brand); font-weight: 700; }
+.aw-tool .args { color: var(--accent); }
+.aw-tool .desc { color: var(--faint); display: block; font-family: var(--sans); font-size: 11px; margin-top: 2px; }
+
+.aw-feed { font-family: var(--mono); font-size: 11.5px; line-height: 1.55; max-height: 252px; overflow-y: auto; scrollbar-width: thin; }
+.aw-feed .ln { padding: 3px 0; opacity: 0; animation: awfade .35s forwards; display: flex; gap: 7px; }
+@keyframes awfade { to { opacity: 1; } }
+.aw-feed .seat { font-weight: 800; flex: 0 0 auto; width: 14px; text-align: center; border-radius: 4px; color: #07080d; }
+.aw-feed .seat.A { background: var(--A); }
+.aw-feed .seat.B { background: var(--B); }
+.aw-feed .seat.ref { background: var(--brand); }
+.aw-feed .body { min-width: 0; flex: 1; word-break: break-word; }
+.aw-feed .call { color: var(--brand); }
+.aw-feed .arg { color: var(--accent); }
+.aw-feed .ret { color: var(--muted); }
+.aw-feed .ok { color: var(--win); }
+.aw-feed .bad { color: var(--danger); }
+.aw-feed .thought { color: var(--faint); font-style: italic; }
+
+.aw-odds { display: flex; flex-direction: column; gap: 9px; }
+.aw-odds .row { display: flex; align-items: center; gap: 9px; }
+.aw-odds .sw { width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto; }
+.aw-odds .nm { font-size: 12px; font-weight: 650; flex: 0 0 92px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aw-odds .bar { flex: 1; height: 8px; background: var(--base); border-radius: 999px; overflow: hidden; border: 1px solid var(--border); }
+.aw-odds .fill { height: 100%; border-radius: 999px; transition: width .5s ease; }
+.aw-odds .pct { font-family: var(--mono); font-size: 12px; color: var(--ink); flex: 0 0 auto; width: 40px; text-align: right; }
+.aw-foot { color: var(--faint); font-size: 11px; margin-top: 7px; line-height: 1.5; }
