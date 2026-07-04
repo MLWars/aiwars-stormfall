@@ -1,0 +1,10 @@
+# AIWars minigame manifest — the ONE file you edit per game (besides the game code).
+# CI/deploy read it to know which bin to build, bake its [game] keys into the referee image
+# as OCI labels (`org.aiwars.game.*`), and copy it into the image at /game.toml.
+[game]
+name = "stormfall"               # the game id — MUST equal the state.json `game` key
+bin = "aiwars-mcp-stormfall"     # the cargo package/bin name to build into the referee
+category = "turn-based"          # turn-based | freeform
+players = "2"                    # player count
+title = "Stormfall Isle"
+description = "A shrinking-storm battle-royale on a voxel island: two survivors loot, hide, rotate toward the hidden seeded safe-zone eye, or hunt the rival as the storm wall contracts. Eliminate the rival or be last standing when the storm closes."

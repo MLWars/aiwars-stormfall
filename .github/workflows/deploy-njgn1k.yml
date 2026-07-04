@@ -1,12 +1,10 @@
 name: deploy-njgn1k
 
-# Push-triggered variant for agent sessions that can't use workflow_dispatch.
-# Scoped to THIS branch only; builds the stormfall referee and pushes it to the
-# aiwars-njgn1k deployment's per-deployment ECR repo `aiwars/aiwars-njgn1k/mcp`.
-#
-#   - deployment hardcoded to aiwars-njgn1k (never touches aiwars-test-asaf)
-#   - no ecr:CreateRepository attempt (repo is provisioned by terraform)
-#   - does NOT push `:latest` (only `:stormfall` + `:stormfall-<sha>`)
+# Push-triggered variant of deploy.yml for agent sessions that can't use
+# workflow_dispatch. Scoped to THIS branch only; builds the stormfall referee and
+# pushes it to the aiwars-njgn1k deployment's per-deployment ECR repo
+# `aiwars/aiwars-njgn1k/mcp`. Hardcoded to aiwars-njgn1k (never touches
+# aiwars-test-asaf); no ecr:CreateRepository; does NOT push `:latest`.
 on:
   push:
     branches: [claude/njgn1k-referee-push]
@@ -22,13 +20,28 @@ concurrency:
 env:
   AWS_REGION: us-east-1
   DEPLOYMENT: aiwars-njgn1k
-  GAME: stormfall
 
 jobs:
   deploy:
     runs-on: [self-hosted, aiwars-ec2]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read game manifest
+        id: game
+        run: |
+          set -euo pipefail
+          {
+            python3 - <<'PY'
+          import tomllib
+          g = tomllib.load(open("game.toml", "rb")).get("game", {})
+          print(f"name={g['name']}")
+          print("labels<<LBL")
+          for k, v in g.items():
+              print(f"org.aiwars.game.{k}={v}")
+          print("LBL")
+          PY
+          } >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -57,12 +70,9 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ steps.ecr.outputs.repo }}:${{ env.GAME }}
-            ${{ steps.ecr.outputs.repo }}:${{ env.GAME }}-${{ github.sha }}
-          labels: |
-            org.aiwars.game.name=${{ env.GAME }}
-            org.aiwars.game.category=turn-based
-            org.aiwars.game.players=2
+            ${{ steps.ecr.outputs.repo }}:${{ steps.game.outputs.name }}
+            ${{ steps.ecr.outputs.repo }}:${{ steps.game.outputs.name }}-${{ github.sha }}
+          labels: ${{ steps.game.outputs.labels }}
           secrets: |
             gh_token=${{ secrets.AIWARS_DEP_TOKEN }}
 
@@ -70,9 +80,9 @@ jobs:
         run: |
           set -euo pipefail
           aws ecr describe-images --repository-name "aiwars/${DEPLOYMENT}/mcp" \
-            --image-ids imageTag=${GAME} --region "$AWS_REGION" \
+            --image-ids imageTag=${{ steps.game.outputs.name }} --region "$AWS_REGION" \
             --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt,tags:imageTags}' --output table \
             || echo "::warning::describe-images not permitted for this role; rely on the push step above"
 
       - run: |
-          echo "Pushed **${GAME}** referee -> \`${{ steps.ecr.outputs.repo }}\` (tags: \`${GAME}\`, \`${GAME}-${{ github.sha }}\`) for deployment **aiwars-njgn1k**." >> "$GITHUB_STEP_SUMMARY"
+          echo "Pushed **${{ steps.game.outputs.name }}** referee -> \`${{ steps.ecr.outputs.repo }}\` (tags: \`${{ steps.game.outputs.name }}\`, \`${{ steps.game.outputs.name }}-${{ github.sha }}\`) for deployment **aiwars-njgn1k**." >> "$GITHUB_STEP_SUMMARY"
