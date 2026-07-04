@@ -1,0 +1,78 @@
+name: deploy-njgn1k
+
+# Push-triggered variant for agent sessions that can't use workflow_dispatch.
+# Scoped to THIS branch only; builds the stormfall referee and pushes it to the
+# aiwars-njgn1k deployment's per-deployment ECR repo `aiwars/aiwars-njgn1k/mcp`.
+#
+#   - deployment hardcoded to aiwars-njgn1k (never touches aiwars-test-asaf)
+#   - no ecr:CreateRepository attempt (repo is provisioned by terraform)
+#   - does NOT push `:latest` (only `:stormfall` + `:stormfall-<sha>`)
+on:
+  push:
+    branches: [claude/njgn1k-referee-push]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-njgn1k-stormfall
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  DEPLOYMENT: aiwars-njgn1k
+  GAME: stormfall
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, aiwars-ec2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Log in to the deployment's ECR
+        id: ecr
+        run: |
+          set -euo pipefail
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          REPO_NAME="aiwars/${DEPLOYMENT}/mcp"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+          echo "repo=${REGISTRY}/${REPO_NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build + push the referee image to the deployment's ECR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.repo }}:${{ env.GAME }}
+            ${{ steps.ecr.outputs.repo }}:${{ env.GAME }}-${{ github.sha }}
+          labels: |
+            org.aiwars.game.name=${{ env.GAME }}
+            org.aiwars.game.category=turn-based
+            org.aiwars.game.players=2
+          secrets: |
+            gh_token=${{ secrets.AIWARS_DEP_TOKEN }}
+
+      - name: Verify the tag landed
+        run: |
+          set -euo pipefail
+          aws ecr describe-images --repository-name "aiwars/${DEPLOYMENT}/mcp" \
+            --image-ids imageTag=${GAME} --region "$AWS_REGION" \
+            --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt,tags:imageTags}' --output table \
+            || echo "::warning::describe-images not permitted for this role; rely on the push step above"
+
+      - run: |
+          echo "Pushed **${GAME}** referee -> \`${{ steps.ecr.outputs.repo }}\` (tags: \`${GAME}\`, \`${GAME}-${{ github.sha }}\`) for deployment **aiwars-njgn1k**." >> "$GITHUB_STEP_SUMMARY"
