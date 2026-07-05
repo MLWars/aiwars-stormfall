@@ -45,8 +45,10 @@ async fn status(State(st): State<ControlState>) -> Json<WorldStatus> {
         elapsed_secs: 0,
         champions: vec![],
         result: m.result(),
-        minigame: Some(m.state_json()),
+        minigame: Some(m.status_minigame_json()),
         view_url: None,
+        // Builder worlds only; not a concern here.
+        builder_token: None,
     })
 }
 
