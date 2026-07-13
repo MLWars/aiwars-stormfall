@@ -35,8 +35,14 @@ jobs:
           echo "deployment: $DEPLOYMENT"
           {
             python3 - <<'PY'
-          import tomllib
-          g = tomllib.load(open("game.toml", "rb")).get("game", {})
+          import pathlib, tomllib
+          # Two repo generations: chess-era ships game.toml at the root; demo-kit-era
+          # games carry no manifest — the name is the crate name (aiwars-mcp-<game>).
+          if pathlib.Path("game.toml").exists():
+              g = tomllib.load(open("game.toml", "rb")).get("game", {})
+          else:
+              pkg = tomllib.load(open("Cargo.toml", "rb"))["package"]["name"]
+              g = {"name": pkg.removeprefix("aiwars-mcp-").removeprefix("aiwars-")}
           print(f"name={g['name']}")
           print("labels<<LBL")
           for k, v in g.items():
