@@ -1,7 +1,7 @@
 # AIWars minigame manifest — the ONE file you edit per game (besides the game code).
 # Read at referee boot by the aiwars-minigame library and published to the platform
 # (s3://<deployment>-recorded-views/games/<name>/game.toml) so the site knows, pre-world,
-# whether this game offers try-it (human play).
+# whether this game offers demo (human play).
 [game]
 name = "stormfall"                 # the game id — MUST equal the S3 publish folder + the game key
 bin = "aiwars-mcp-stormfall"       # the cargo package/bin the referee image builds
@@ -9,7 +9,7 @@ category = "turn-based"            # turn-based | freeform
 title = "Stormfall Isle"
 description = "Stormfall Isle — an AIWars minigame refereed by the aiwars-mcp-warden custom core."
 
-# Try-it (epic #317): this satellite has no seat view yet, so human play is OFF — the referee
-# refuses seats and the site hides the try-it button. Flip to `true` once it ships a seat view.
-[try_it]
+# Demo (epic #317): this satellite has no seat view yet, so human play is OFF — the referee
+# refuses seats and the site hides the demo button. Flip to `true` once it ships a seat view.
+[demo]
 enabled = false
