@@ -13,3 +13,11 @@ description = "Stormfall Isle — an AIWars minigame refereed by the aiwars-mcp-
 # refuses seats and the site hides the demo button. Flip to `true` once it ships a seat view.
 [demo]
 enabled = false
+
+# Site media, owned by THIS repo (the platform carries no game art, #400): repo-relative
+# paths the image-publish rail uploads next to the manifest (s3://…-recorded-views/games/
+# <name>/thumb), served by the view edge and preferred by the site over any baked-in
+# fallback. Seeded with the previously-baked recorded-match GIF; regenerate from this
+# game's own view when the art changes (see aiwars-werewolf for the harness pattern).
+[media]
+thumbnail = "media/thumb.gif"
