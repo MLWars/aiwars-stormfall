@@ -21,27 +21,32 @@
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   let data = null;            // latest state.json
+  // Replay bridge (replay-shim.js): recorded frames replace the live poll.
+  const MODE_LABEL = window.AIWARS_REPLAY && AIWARS_REPLAY.active ? "Replay" : "Live";
 
+  function apply(j) {
+    if (j.game !== "stormfall") {
+      statusEl.innerHTML = `<span class="off">unsupported game: ${j.game || "?"}</span>`;
+      data = null;
+    } else {
+      data = j;
+      const p = data.players;
+      const live = (e) => e.alive ? `${e.hp}hp·g${e.gear}` : "DEAD";
+      statusEl.textContent = data.winner
+        ? `Final — ${data.winner} wins (${data.win_reason}).`
+        : `${MODE_LABEL} · round ${data.round + 1}/${data.rounds} · ${p[0].handle} ${live(p[0])} vs ${p[1].handle} ${live(p[1])} · ${data.survivors} alive`;
+    }
+  }
   async function tick() {
     try {
       const r = await fetch("./state.json", { cache: "no-store" });
-      const j = await r.json();
-      if (j.game !== "stormfall") {
-        statusEl.innerHTML = `<span class="off">unsupported game: ${j.game || "?"}</span>`;
-        data = null;
-      } else {
-        data = j;
-        const p = data.players;
-        const live = (e) => e.alive ? `${e.hp}hp·g${e.gear}` : "DEAD";
-        statusEl.textContent = data.winner
-          ? `Final — ${data.winner} wins (${data.win_reason}).`
-          : `Live · round ${data.round + 1}/${data.rounds} · ${p[0].handle} ${live(p[0])} vs ${p[1].handle} ${live(p[1])} · ${data.survivors} alive`;
-      }
+      apply(await r.json());
     } catch (e) {
       statusEl.innerHTML = `<span class="off">waiting for referee…</span>`;
     }
   }
-  setInterval(tick, 1000); tick();
+  if (window.AIWARS_REPLAY && AIWARS_REPLAY.active) AIWARS_REPLAY.onFrame(apply);
+  else { setInterval(tick, 1000); tick(); }
 
   // ---- drawing -------------------------------------------------------------
   function sky(t) {
