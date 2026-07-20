@@ -1,334 +1,433 @@
-/* Stormfall Isle spectator board. Polls ./state.json (the referee's live game
- * state) and renders the battle-royale: an iso voxel island with a contracting
- * magenta storm wall, two survivors (loot/hide/rotate/hunt), loot crates, bunkers,
- * the hidden seeded "final eye", HP/gear bars and live odds. Read-only and offline
- * — everything is drawn procedurally (no remote assets), like the chess board's
- * app.js. Dispatches on data.game so the same SPA shape generalises. */
-(function () {
-  const W = 780, H = 560;
-  const cv = document.getElementById("c"), ctx = cv.getContext("2d");
-  ctx.imageSmoothingEnabled = false;
-  const statusEl = document.getElementById("status");
+// LINE WARS — read-only spectator SPA (Graphwar-style artillery free-for-all for AIWars).
+//
+// Polls ./state.json (same origin → the view gateway forwards it to this match's referee)
+// ~1×/sec and renders the battlefield onto a <canvas>. The world is BIGGER than the screen:
+// a pan/zoom camera auto-follows the action (the active shooter / the flying shot), and you can
+// DRAG to look around and SCROLL to zoom — a minimap in the corner shows where everyone is.
+// Dispatches on `data.game === "line-wars"`.
 
-  // ---- iso island grid (mirrors pocs/games/stormfall/game.js projection) ----
-  const GN = 9;
-  const TILE = 40, TH = 20;
-  const ISO_CX = W * 0.40, ISO_CY = 168;
-  function iso(gx, gy) { return { x: ISO_CX + (gx - gy) * TILE, y: ISO_CY + (gx + gy) * TH }; }
-  const MID = (GN - 1) / 2;
+const el = (id) => document.getElementById(id);
+const canvas = el("field");
+const ctx = canvas.getContext("2d");
+const GOLD = "#ffd23f";
 
-  const lerp = (a, b, t) => a + (b - a) * t;
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// Distinct per-player color via the golden-angle hue spread (stable for index 0..29).
+function colorFor(i) {
+  return `hsl(${((i * 137.508) % 360).toFixed(1)}, 85%, 62%)`;
+}
 
-  let data = null;            // latest state.json
-  // Replay bridge (replay-shim.js): recorded frames replace the live poll.
-  const MODE_LABEL = window.AIWARS_REPLAY && AIWARS_REPLAY.active ? "Replay" : "Live";
+const MEMES = {
+  hit_enemy: ["GET REKT", "BOOM 💥", "HEADSHOT", "+1 FRAG", "CALCULATED", "MATH CHECKS OUT", "NO SCOPE", "DOUBLE KILL?"],
+  friendly_fire: ["TEAM KILL 💀", "OOPS", "SKILL ISSUE", "OWN GOAL", "WHY THO", "FRIENDLY FIRE!", "BRO…"],
+  blocked: ["BLOCKED, L", "OOF, ROCK", "ABSORBED", "DENIED", "TANKY", "WALL SAYS NO"],
+  off_field: ["AIR BALL", "MISSED LOL", "INTO THE VOID", "BIG WHIFF", "OUT OF BOUNDS", "TRY AGAIN"],
+  exploded: ["IT EXPLODED 🤡", "DOMAIN ERROR", "NaN MOMENT", "SQRT OF SADNESS", "LMAO", "DIV BY SKILL"],
+};
 
-  function apply(j) {
-    if (j.game !== "stormfall") {
-      statusEl.innerHTML = `<span class="off">unsupported game: ${j.game || "?"}</span>`;
-      data = null;
-    } else {
-      data = j;
-      const p = data.players;
-      const live = (e) => e.alive ? `${e.hp}hp·g${e.gear}` : "DEAD";
-      statusEl.textContent = data.winner
-        ? `Final — ${data.winner} wins (${data.win_reason}).`
-        : `${MODE_LABEL} · round ${data.round + 1}/${data.rounds} · ${p[0].handle} ${live(p[0])} vs ${p[1].handle} ${live(p[1])} · ${data.survivors} alive`;
+let data = null;
+let view = { x0: -25, x1: 25, y0: -15, y1: 15 }; // field bounds (from state)
+let dpr = 1;
+
+// Camera: cx/cy = world point at screen center; zoom multiplies the fit-to-screen scale, so
+// zoom>1 means the world is bigger than the viewport (you pan to see the rest).
+const cam = { cx: 0, cy: 0, zoom: 1.9, follow: true, inited: false };
+const ZOOM_MIN = 0.85, ZOOM_MAX = 7;
+
+let shotKey = null, shotAnim = null;
+let bursts = [], floats = [], pulse = 0;
+
+// ---- camera / transform ----------------------------------------------------
+
+function fit() {
+  const r = canvas.getBoundingClientRect();
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.max(1, Math.round(r.width * dpr));
+  canvas.height = Math.max(1, Math.round(r.height * dpr));
+}
+
+function baseScale() {
+  const pad = 10 * dpr;
+  return Math.min((canvas.width - 2 * pad) / (view.x1 - view.x0),
+                  (canvas.height - 2 * pad) / (view.y1 - view.y0));
+}
+
+function tx() {
+  const scale = baseScale() * cam.zoom;
+  const W = canvas.width, H = canvas.height;
+  return { scale, X: (wx) => W / 2 + (wx - cam.cx) * scale, Y: (wy) => H / 2 - (wy - cam.cy) * scale };
+}
+
+// canvas client px → world coords
+function screenToWorld(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  const px = (clientX - r.left) * dpr, py = (clientY - r.top) * dpr;
+  const t = tx();
+  return { x: cam.cx + (px - canvas.width / 2) / t.scale, y: cam.cy - (py - canvas.height / 2) / t.scale };
+}
+
+function clampCam() {
+  const mx = (view.x1 - view.x0) * 0.3, my = (view.y1 - view.y0) * 0.3;
+  cam.cx = Math.max(view.x0 - mx, Math.min(view.x1 + mx, cam.cx));
+  cam.cy = Math.max(view.y0 - my, Math.min(view.y1 + my, cam.cy));
+}
+
+// ---- drawing ---------------------------------------------------------------
+
+function niceStep(span) {
+  const raw = span / 12, pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * pow) return m * pow;
+  return 10 * pow;
+}
+
+function drawGrid(t) {
+  const W = canvas.width, H = canvas.height;
+  const gs = niceStep(view.x1 - view.x0);
+  ctx.lineWidth = 1 * dpr;
+  for (let gx = Math.ceil(view.x0 / gs) * gs; gx <= view.x1; gx += gs) {
+    const px = t.X(gx);
+    ctx.strokeStyle = Math.abs(gx) < 1e-6 ? "rgba(255,255,255,.20)" : "rgba(255,255,255,.06)";
+    ctx.beginPath(); ctx.moveTo(px, t.Y(view.y0)); ctx.lineTo(px, t.Y(view.y1)); ctx.stroke();
+  }
+  for (let gy = Math.ceil(view.y0 / gs) * gs; gy <= view.y1; gy += gs) {
+    const py = t.Y(gy);
+    ctx.strokeStyle = Math.abs(gy) < 1e-6 ? "rgba(255,255,255,.20)" : "rgba(255,255,255,.06)";
+    ctx.beginPath(); ctx.moveTo(t.X(view.x0), py); ctx.lineTo(t.X(view.x1), py); ctx.stroke();
+  }
+  // field border
+  ctx.strokeStyle = "rgba(255,255,255,.18)"; ctx.lineWidth = 2 * dpr;
+  ctx.strokeRect(t.X(view.x0), t.Y(view.y1), (view.x1 - view.x0) * t.scale, (view.y1 - view.y0) * t.scale);
+}
+
+function drawObstacles(t) {
+  for (const o of data.obstacles || []) {
+    const px = t.X(o.x), py = t.Y(o.y), r = o.r * t.scale;
+    const g = ctx.createRadialGradient(px - r * .3, py - r * .3, r * .2, px, py, r);
+    g.addColorStop(0, "#5a5f6e"); g.addColorStop(1, "#23262f");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#0008"; ctx.lineWidth = 2 * dpr; ctx.stroke();
+    if (r > 12 * dpr) {
+      ctx.font = `${r * 1.1}px serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("🪨", px, py + r * .05);
     }
   }
-  async function tick() {
-    try {
-      const r = await fetch("./state.json", { cache: "no-store" });
-      apply(await r.json());
-    } catch (e) {
-      statusEl.innerHTML = `<span class="off">waiting for referee…</span>`;
-    }
-  }
-  if (window.AIWARS_REPLAY && AIWARS_REPLAY.active) AIWARS_REPLAY.onFrame(apply);
-  else { setInterval(tick, 1000); tick(); }
+}
 
-  // ---- drawing -------------------------------------------------------------
-  function sky(t) {
-    const g = ctx.createLinearGradient(0, 0, 0, H * 0.62);
-    g.addColorStop(0, "#1b1340"); g.addColorStop(0.55, "#3a1f52"); g.addColorStop(1, "#6d2a86");
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    for (let i = 0; i < 40; i++) {
-      const x = (i * 137) % W, y = (i * 53) % 150, tw = (Math.sin(t / 700 + i) + 1) / 2;
-      ctx.fillStyle = `rgba(220,210,255,${0.10 + tw * 0.28})`; ctx.fillRect(x, y, 2, 2);
-    }
-    const sx = W * 0.78, sy = 120;
-    glow(sx, sy, 80, "rgba(255,150,120,0.34)");
-    ctx.fillStyle = "#ffd0a0"; ctx.beginPath(); ctx.arc(sx, sy, 22, 0, 7); ctx.fill();
-  }
-  function water(t) {
-    const g = ctx.createLinearGradient(0, H * 0.5, 0, H);
-    g.addColorStop(0, "#0d4a6e"); g.addColorStop(1, "#06243e");
-    ctx.fillStyle = g; ctx.fillRect(0, H * 0.5, W, H * 0.5);
-    for (let i = 0; i < 26; i++) {
-      const y = H * 0.5 + i * 9;
-      const a = 0.04 + 0.06 * (Math.sin(t / 600 + i) * 0.5 + 0.5);
-      ctx.strokeStyle = `rgba(120,210,255,${a})`; ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      for (let x = 0; x <= W; x += 36) { const yy = y + Math.sin(t / 500 + i + x / 90) * 3; x ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy); }
-      ctx.stroke();
-    }
-  }
-  function islandBase() {
-    const c1 = iso(GN - 0.4, -0.6), c2 = iso(GN - 0.4, GN - 0.4), c3 = iso(-0.6, GN - 0.4);
-    const depth = 48;
-    glow((c1.x + c3.x) / 2, (c1.y + c3.y) / 2 + 26, 300, "rgba(40,120,160,0.16)");
-    ctx.fillStyle = "#7a5a34"; ctx.beginPath(); ctx.moveTo(c3.x, c3.y); ctx.lineTo(c2.x, c2.y); ctx.lineTo(c2.x, c2.y + depth); ctx.lineTo(c3.x, c3.y + depth); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = "#5e4427"; ctx.beginPath(); ctx.moveTo(c2.x, c2.y); ctx.lineTo(c1.x, c1.y); ctx.lineTo(c1.x, c1.y + depth); ctx.lineTo(c2.x, c2.y + depth); ctx.closePath(); ctx.fill();
-  }
-  function diamond(x, y, col) {
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.moveTo(x, y - TH); ctx.lineTo(x + TILE, y); ctx.lineTo(x, y + TH); ctx.lineTo(x - TILE, y); ctx.closePath(); ctx.fill();
-  }
-  function cellBase(gx, gy) {
-    const edge = (gx <= 0 || gy <= 0 || gx >= GN - 1 || gy >= GN - 1);
-    const r = ((gx * 31 + gy * 17) % 10) / 10;
-    if (edge) return r < 0.5 ? "#d9c089" : "#cdb37a";
-    return r < 0.5 ? "#3f9e54" : (r < 0.8 ? "#349049" : "#46a85d");
-  }
-  function floorTiles(t) {
-    const center = data ? data.center : { cx: MID, cy: MID };
-    const ringR = data ? data.ringR : GN;
-    for (let gy = 0; gy < GN; gy++) for (let gx = 0; gx < GN; gx++) {
-      const p = iso(gx, gy);
-      diamond(p.x, p.y, cellBase(gx, gy));
-      ctx.strokeStyle = "rgba(255,255,255,0.10)"; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(p.x - TILE, p.y); ctx.lineTo(p.x, p.y - TH); ctx.lineTo(p.x + TILE, p.y); ctx.stroke();
-      const d = Math.max(Math.abs(gx - center.cx), Math.abs(gy - center.cy));
-      if (d > ringR + 0.001) {
-        diamond(p.x, p.y, "rgba(18,8,30,0.60)");
-        const pulse = 0.28 + 0.16 * (Math.sin(t / 360 + gx + gy) * 0.5 + 0.5);
-        diamond(p.x, p.y, `rgba(150,40,205,${pulse})`);
+function drawSoldiers(t) {
+  const sh = data.shooter;
+  for (const pl of data.players || []) {
+    const color = colorFor(pl.index);
+    for (const s of pl.soldiers || []) {
+      const px = t.X(s.x), py = t.Y(s.y), r = Math.max(5 * dpr, 0.85 * t.scale);
+      const active = !!sh && sh.player === pl.index && sh.index === s.index && s.alive;
+
+      if (active) {
+        const ring = r + (3 + 2 * Math.sin(pulse * 6)) * dpr;
+        ctx.strokeStyle = GOLD; ctx.lineWidth = 3 * dpr;
+        ctx.shadowColor = GOLD; ctx.shadowBlur = 16 * dpr;
+        ctx.beginPath(); ctx.arc(px, py, ring, 0, Math.PI * 2); ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+
+      ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fillStyle = s.alive ? color : "#2a2a2e";
+      ctx.globalAlpha = s.alive ? 0.9 : 0.5; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.lineWidth = 2.2 * dpr; ctx.strokeStyle = s.alive ? "#0007" : "#555"; ctx.stroke();
+
+      if (!s.alive) {
+        ctx.strokeStyle = "#aaa"; ctx.lineWidth = 2 * dpr; const d = r * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(px - d, py - d); ctx.lineTo(px + d, py + d);
+        ctx.moveTo(px + d, py - d); ctx.lineTo(px - d, py + d); ctx.stroke();
+      } else if (r > 9 * dpr) {
+        ctx.font = `${r * 1.1}px serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("😎", px, py + r * .08);
+      } else {
+        ctx.fillStyle = "#0009";
+        ctx.beginPath(); ctx.arc(px, py, r * .28, 0, Math.PI * 2); ctx.fill();
+      }
+
+      if (active && r > 7 * dpr) {
+        ctx.font = `900 ${11 * dpr}px Impact, "Arial Black", sans-serif`;
+        ctx.fillStyle = GOLD; ctx.textAlign = "center";
+        ctx.fillText("▼ UP", px, py - r - 11 * dpr + Math.sin(pulse * 5) * 2 * dpr);
       }
     }
   }
-  function cratesDraw(t) {
-    if (!data) return;
-    for (const c of data.crates) {
-      const p = iso(c.gx, c.gy);
-      if (c.taken) { ctx.globalAlpha = 0.5; box(p.x - 8, p.y - 7, 16, 9, "#5b4630", "#6e5638", "#3f3020"); ctx.globalAlpha = 1; continue; }
-      shadow(p.x, p.y + 7, 12, 4, 0.26);
-      box(p.x - 10, p.y - 11, 20, 12, "#b5862f", "#d6a23c", "#8c6622");
-      const bob = Math.sin(t / 400 + c.gx) * 3;
-      glow(p.x, p.y - 24 + bob, 12, "rgba(255,210,90,0.36)");
-      gearIcon(p.x, p.y - 24 + bob, "#ffd23c");
-    }
-  }
-  function bunkersDraw() {
-    if (!data) return;
-    for (const b of data.bunkers) {
-      const p = iso(b.gx, b.gy);
-      shadow(p.x, p.y + 7, 16, 5, 0.2);
-      ctx.fillStyle = "#6f6242";
-      for (let a = 0; a < 7; a++) { const ang = (a / 7) * Math.PI * 2; ctx.beginPath(); ctx.ellipse(p.x + Math.cos(ang) * 14, p.y + Math.sin(ang) * 7 + 2, 5, 3.5, 0, 0, 7); ctx.fill(); }
-      ctx.fillStyle = "#8a7a52";
-      for (let a = 0; a < 7; a++) { const ang = (a / 7) * Math.PI * 2 + 0.4; ctx.beginPath(); ctx.ellipse(p.x + Math.cos(ang) * 11, p.y + Math.sin(ang) * 5 - 3, 4.5, 3, 0, 0, 7); ctx.fill(); }
-      label(p.x, p.y + 3, "▣", 9, "rgba(220,210,170,0.5)", "center");
-    }
-  }
-  function stormWall(t) {
-    if (!data) return;
-    const c = data.center, R = data.ringR;
-    const corners = [[c.cx - R, c.cy - R], [c.cx + R, c.cy - R], [c.cx + R, c.cy + R], [c.cx - R, c.cy + R]].map(([gx, gy]) => iso(gx, gy));
-    ctx.save();
-    ctx.beginPath(); corners.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
-    const pulse = 0.5 + 0.4 * (Math.sin(t / 220) * 0.5 + 0.5);
-    ctx.lineWidth = 5; ctx.strokeStyle = `rgba(214,80,255,${pulse})`;
-    ctx.shadowColor = "rgba(200,70,255,0.9)"; ctx.shadowBlur = 18; ctx.stroke();
-    ctx.lineWidth = 2; ctx.strokeStyle = `rgba(255,200,255,${pulse})`; ctx.shadowBlur = 0; ctx.stroke();
-    ctx.restore();
-  }
-  function eyeMarker(t) {
-    if (!data) return;
-    const fc = data.finalC, fp = iso(fc.cx, fc.cy), midP = iso(MID, MID);
-    if (fc.cx !== MID || fc.cy !== MID) {
-      const segs = 14;
-      for (let i = 0; i <= segs; i++) {
-        const f = i / segs, x = lerp(midP.x, fp.x, f), y = lerp(midP.y, fp.y, f);
-        const wave = (Math.sin(t / 320 - f * 5) * 0.5 + 0.5);
-        ctx.fillStyle = `rgba(94,234,212,${0.08 + wave * 0.28 * f})`;
-        ctx.beginPath(); ctx.arc(x, y, 1.3 + wave * 1.4 * f, 0, 7); ctx.fill();
-      }
-    }
-    const fpulse = 0.42 + 0.3 * (Math.sin(t / 300) * 0.5 + 0.5);
-    glow(fp.x, fp.y, 24, `rgba(94,234,212,${0.10 + fpulse * 0.10})`);
-    ctx.strokeStyle = `rgba(94,234,212,${fpulse})`; ctx.lineWidth = 1.6;
-    ctx.beginPath(); ctx.arc(fp.x, fp.y, 8, 0, 7); ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(fp.x - 13, fp.y); ctx.lineTo(fp.x - 5, fp.y); ctx.moveTo(fp.x + 5, fp.y); ctx.lineTo(fp.x + 13, fp.y);
-    ctx.moveTo(fp.x, fp.y - 10); ctx.lineTo(fp.x, fp.y - 4); ctx.moveTo(fp.x, fp.y + 4); ctx.lineTo(fp.x, fp.y + 10); ctx.stroke();
-    label(fp.x, fp.y - 16, "◎ FINAL EYE", 8, "rgba(140,245,225,0.9)", "center");
-  }
+}
 
-  function entsDraw(t) {
-    if (!data) return;
-    const drawn = data.ents.map((e) => { const p = iso(e.gx, e.gy); return { e, x: p.x, y: p.y, sort: p.y }; });
-    drawn.sort((a, b) => a.sort - b.sort);
-    for (const d of drawn) {
-      if (d.e.isNPC) npcSprite(d.x, d.y, d.e);
-      else championSprite(d.x, d.y, d.e, t);
-    }
-    // champion name plates last
-    for (const d of drawn) if (!d.e.isNPC && d.e.alive) champPlate(d.x, d.y + 6, d.e);
-  }
-  function championSprite(x, y, e, t) {
-    if (!e.alive) { gravestone(x, y, e); return; }
-    const soft = e.id === "A" ? "#5eead4" : "#c4b5fd";
-    shadow(x, y + 6, 13, 5, 0.3);
-    // body
-    ctx.fillStyle = e.col; rrect(x - 9, y - 26, 18, 22, 6); ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.16)"; ctx.fillRect(x - 9, y - 26, 18, 5);
-    // head
-    ctx.fillStyle = "#f3c79a"; rrect(x - 7, y - 38, 14, 13, 5); ctx.fill();
-    ctx.fillStyle = e.id === "A" ? "#059669" : "#6d28d9"; rrect(x - 8, y - 40, 16, 6, 3); ctx.fill();
-    // hp pips
-    hpPips(x, y - 47, e);
-    if (e.gear > 0) {
-      for (let i = 0; i < Math.min(e.gear, 5); i++) { ctx.fillStyle = "#ffd23c"; ctx.fillRect(x - 12 + i * 6, y - 53, 4, 4); }
-      glow(x, y - 18, 20, "rgba(255,210,60," + Math.min(0.3, e.gear * 0.06) + ")");
-    }
-    // last-move ring
-    if (e.lastMove) { label(x, y - 58, moveGlyph(e.lastMove), 9, soft, "center"); }
-  }
-  function moveGlyph(m) {
-    return m === "loot:crate" ? "▣ loot" : m === "hide:bunker" ? "⛨ hide" : m === "rotate:eye" ? "◎ rotate" : m === "hunt:rival" ? "✶ hunt" : "";
-  }
-  function champPlate(x, y, e) {
-    const soft = e.id === "A" ? "#5eead4" : "#c4b5fd";
-    const nm = e.name.toUpperCase();
-    const w = Math.max(56, nm.length * 8);
-    ctx.fillStyle = "rgba(8,16,30,0.94)"; rrect(x - w / 2, y, w, 16, 5); ctx.fill();
-    ctx.strokeStyle = soft + "55"; ctx.lineWidth = 1; rrect(x - w / 2 + 0.5, y + 0.5, w - 1, 15, 5); ctx.stroke();
-    label(x, y + 11, nm, 8, soft, "center");
-  }
-  function hpPips(x, y, e) {
-    const w = 32, h = 4, frac = clamp(e.hp / e.maxhp, 0, 1);
-    ctx.fillStyle = "rgba(8,16,30,0.85)"; rrect(x - w / 2 - 1, y - 1, w + 2, h + 2, 3); ctx.fill();
-    ctx.fillStyle = frac > 0.5 ? "#34d399" : frac > 0.25 ? "#f59e0b" : "#fb5d5d";
-    rrect(x - w / 2, y, Math.max(2, w * frac), h, 2); ctx.fill();
-  }
-  function npcSprite(x, y, e) {
-    if (!e.alive) { gravestone(x, y, e); return; }
-    shadow(x, y + 5, 9, 4, 0.28);
-    ctx.fillStyle = e.col; rrect(x - 7, y - 19, 14, 16, 5); ctx.fill();
-    ctx.fillStyle = "#cbd5e1"; rrect(x - 5, y - 29, 10, 11, 4); ctx.fill();
-    ctx.fillStyle = "#22d3ee"; ctx.fillRect(x - 2, y - 25, 4, 2);
-    const frac = clamp(e.hp / e.maxhp, 0, 1);
-    ctx.fillStyle = "rgba(8,16,30,0.8)"; ctx.fillRect(x - 10, y - 35, 20, 4);
-    ctx.fillStyle = frac > 0.4 ? "#9ca3af" : "#fb5d5d"; ctx.fillRect(x - 9, y - 34, 18 * frac, 2);
-    label(x, y - 38, e.name.toUpperCase(), 6, "rgba(180,190,210,0.7)", "center");
-  }
-  function gravestone(x, y, e) {
-    shadow(x, y + 5, 11, 5, 0.3);
-    ctx.fillStyle = "#3a4252"; rrect(x - 8, y - 20, 16, 22, 7); ctx.fill();
-    ctx.fillStyle = "#4a5568"; rrect(x - 6, y - 18, 12, 11, 5); ctx.fill();
-    ctx.fillStyle = "#1f2733"; ctx.fillRect(x - 1, y - 14, 2, 7); ctx.fillRect(x - 4, y - 11, 8, 2);
-    label(x, y + 12, e.name.toUpperCase(), 7, "rgba(160,170,190,0.7)", "center");
-  }
+function drawShot(t) {
+  if (!shotAnim) return;
+  const pts = shotAnim.points;
+  if (pts.length < 2) return;
+  const m = shotAnim.muzzle;
+  const lHead = Math.round(m - shotAnim.t * m);
+  const rHead = Math.round(m + shotAnim.t * (pts.length - 1 - m));
 
-  // ---- HUD ----------------------------------------------------------------
-  function hud() {
-    if (!data) return;
-    const p = data.players;
-    const rows = [[p[0], "#10b981", "#5eead4"], [p[1], "#8b5cf6", "#c4b5fd"]];
-    ctx.fillStyle = "rgba(8,14,26,0.84)"; rrect(12, 46, 250, 86, 10); ctx.fill();
-    ctx.strokeStyle = "rgba(168,85,247,0.4)"; ctx.lineWidth = 1; rrect(12.5, 46.5, 249, 85, 10); ctx.stroke();
-    label(24, 64, "STORMFALL ISLE", 10, "#c4b5fd", "left");
-    rows.forEach(([e, col, soft], i) => {
-      const y = 80 + i * 26;
-      label(24, y + 6, (e.name || e.handle).toUpperCase().slice(0, 10), 10, e.alive ? soft : "#6b7280", "left");
-      bar(96, y, 92, 7, e.hp / e.maxhp, e.hp > 30 ? col : "#fb5d5d");
-      label(196, y + 6, e.alive ? Math.round(e.hp) + "hp" : "DEAD", 9, e.alive ? soft : "#fb5d5d", "left");
-      for (let g = 0; g < Math.min(e.gear, 5); g++) { ctx.fillStyle = "#ffd23c"; ctx.fillRect(238 + g * 4, y - 1, 3, 7); }
-    });
-  }
-  function survivorsBadge() {
-    const n = data ? data.survivors : 5;
-    const x = W - 132, y = 46;
-    ctx.fillStyle = "rgba(8,14,26,0.84)"; rrect(x, y, 120, 42, 10); ctx.fill();
-    ctx.strokeStyle = "rgba(244,63,94,0.5)"; ctx.lineWidth = 1; rrect(x + 0.5, y + 0.5, 119, 41, 10); ctx.stroke();
-    label(x + 12, y + 18, "SURVIVORS", 9, "#94a3b8", "left");
-    label(x + 12, y + 36, String(n), 18, "#f43f5e", "left");
-    label(x + 108, y + 36, "alive", 8, "#64748b", "right");
-  }
-  // top-center LIVE ODDS pill — kept clear of the HUD/survivors cards (which sit
-  // lower, at y≈46) and any other top labels.
-  function oddsPill() {
-    const p = data ? data.players : [{ handle: "A" }, { handle: "B" }];
-    const a = data ? clamp(data.odds_a, 0, 1) : 0.5;
-    const pa = Math.round(a * 100), pb = 100 - pa;
-    const bw = 248, x = (W - bw) / 2, yy = 7;
-    ctx.fillStyle = "rgba(7,11,20,0.86)"; rrect(x, yy, bw, 30, 9); ctx.fill();
-    label(W / 2, yy + 12, "◷ LIVE ODDS", 8, "#7C8AA0", "center");
-    label(x + 12, yy + 12, p[0].handle.toUpperCase().slice(0, 8) + " " + pa + "%", 9, "#5eead4", "left");
-    label(x + bw - 12, yy + 12, pb + "% " + p[1].handle.toUpperCase().slice(0, 8), 9, "#c4b5fd", "right");
-    const aw = Math.max(2, (bw - 24) * a);
-    ctx.fillStyle = "#10b981"; rrect(x + 12, yy + 18, aw, 7, 3); ctx.fill();
-    ctx.fillStyle = "#8b5cf6"; rrect(x + 12 + aw, yy + 18, bw - 24 - aw, 7, 3); ctx.fill();
-  }
-  function dispatcher() {
-    const h = 42, y = H - h;
-    ctx.fillStyle = "rgba(5,9,16,0.92)"; ctx.fillRect(0, y, W, h);
-    ctx.strokeStyle = "rgba(168,85,247,0.45)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); ctx.stroke();
-    label(16, y + 18, "⚡ STORM-CAST", 10, "#c4b5fd", "left");
-    let line = "Two survivors on a sinking storm isle — who loots and hunts, who turtles and outlasts?";
-    if (data && !data.winner) {
-      const p = data.players;
-      line = `Round ${data.round + 1}/${data.rounds} · ${data.to_move} to act · ${p[0].name} ${p[0].alive ? p[0].hp + "hp" : "down"} vs ${p[1].name} ${p[1].alive ? p[1].hp + "hp" : "down"}.`;
-    } else if (data && data.winner) {
-      line = data.win_reason === "double" ? "Double knockout — both survivors fell the same tick. Draw."
-        : data.win_reason === "elim" ? `${data.winner} eliminates the rival — VICTORY ROYALE.`
-        : `${data.winner} takes Stormfall Isle (${data.win_reason}).`;
-    }
-    wrap(line, 118, y + 18, W - 138, 14, 12, "#e9d5ff");
-  }
-  function finishOverlay() {
-    if (!data || (!data.winner && data.status !== "double")) return;
-    if (!data.winner && !["double"].includes(data.status)) return;
-    ctx.fillStyle = "rgba(3,6,12,0.58)"; ctx.fillRect(0, 0, W, H);
-    const draw = !data.winner;
-    const col = draw ? "#9aa2b6" : data.players[0].handle === data.winner ? "#34d399" : "#a855f7";
-    const title = draw ? "DOUBLE KO" : "VICTORY ROYALE";
-    glow(W / 2, H / 2 - 16, 220, draw ? "rgba(154,162,182,0.2)" : "rgba(168,85,247,0.2)");
-    label(W / 2, H / 2 - 12, title, draw ? 36 : 40, col, "center");
-    const sub = draw ? "Both survivors fell the same tick"
-      : data.win_reason === "elim" ? data.winner + " eliminates the rival"
-      : data.win_reason === "survive" ? data.winner + " outlasts the storm"
-      : data.winner + " stands strongest as the storm closes";
-    label(W / 2, H / 2 + 18, sub, 16, "#f1edff", "center");
-  }
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.strokeStyle = shotAnim.color; ctx.globalAlpha = 0.35;
+  ctx.lineWidth = 9 * dpr; ctx.shadowColor = shotAnim.color; ctx.shadowBlur = 18 * dpr;
+  strokeRange(t, pts, lHead, rHead);
+  ctx.globalAlpha = 1; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2.5 * dpr; ctx.shadowBlur = 8 * dpr;
+  strokeRange(t, pts, lHead, rHead);
+  ctx.shadowBlur = 0;
 
-  function frame(t) {
-    sky(t); water(t); islandBase(); floorTiles(t);
-    cratesDraw(t); bunkersDraw();
-    stormWall(t);
-    entsDraw(t);
-    eyeMarker(t);
-    hud(); survivorsBadge(); oddsPill(); dispatcher();
-    finishOverlay();
-    vignette();
-    requestAnimationFrame(frame);
+  if (!shotAnim.done) {
+    for (const h of [lHead, rHead]) {
+      const p = pts[Math.max(0, Math.min(pts.length - 1, h))];
+      ctx.fillStyle = "#fff"; ctx.shadowColor = shotAnim.color; ctx.shadowBlur = 16 * dpr;
+      ctx.beginPath(); ctx.arc(t.X(p[0]), t.Y(p[1]), 4 * dpr, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  }
+}
+
+function strokeRange(t, pts, a, b) {
+  a = Math.max(0, a); b = Math.min(pts.length - 1, b);
+  if (b <= a) return;
+  ctx.beginPath();
+  ctx.moveTo(t.X(pts[a][0]), t.Y(pts[a][1]));
+  for (let i = a + 1; i <= b; i++) ctx.lineTo(t.X(pts[i][0]), t.Y(pts[i][1]));
+  ctx.stroke();
+}
+
+function drawBursts(t) {
+  for (const b of bursts) {
+    const r = (6 + b.age * 90) * dpr, a = Math.max(0, 1 - b.age * 1.6);
+    ctx.globalAlpha = a; ctx.strokeStyle = GOLD; ctx.lineWidth = 3 * dpr;
+    ctx.beginPath(); ctx.arc(t.X(b.x), t.Y(b.y), r, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = Math.min(1, a + 0.2);
+    ctx.font = `${Math.min(44, 16 + b.age * 60) * dpr}px serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("💥", t.X(b.x), t.Y(b.y));
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawFloats(t) {
+  for (const f of floats) {
+    const a = Math.max(0, 1 - f.age * 0.8);
+    ctx.globalAlpha = a;
+    ctx.font = `900 ${20 * dpr}px Impact, "Arial Black", sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const px = t.X(f.x), py = t.Y(f.y) - f.age * 40 * dpr;
+    ctx.lineWidth = 4 * dpr; ctx.strokeStyle = "#000a"; ctx.strokeText(f.text, px, py);
+    ctx.fillStyle = f.color; ctx.fillText(f.text, px, py);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Corner minimap: the whole field shrunk, every soldier as a dot, plus the current viewport box.
+function drawMinimap(t) {
+  const W = canvas.width, H = canvas.height;
+  const fw = view.x1 - view.x0, fh = view.y1 - view.y0;
+  const mw = Math.min(W * 0.26, 210 * dpr), mh = mw * (fh / fw);
+  const mx = W - mw - 10 * dpr, my = 10 * dpr;
+  const MX = (wx) => mx + (wx - view.x0) / fw * mw;
+  const MY = (wy) => my + (view.y1 - wy) / fh * mh;
+
+  ctx.globalAlpha = 0.82; ctx.fillStyle = "#0b0d14"; ctx.strokeStyle = "#ffffff22";
+  ctx.lineWidth = 1 * dpr;
+  roundRect(mx, my, mw, mh, 6 * dpr); ctx.fill(); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  for (const o of data.obstacles || []) {
+    ctx.fillStyle = "#ffffff18";
+    ctx.beginPath(); ctx.arc(MX(o.x), MY(o.y), Math.max(1.5, o.r / fw * mw), 0, Math.PI * 2); ctx.fill();
+  }
+  for (const pl of data.players || []) {
+    for (const s of pl.soldiers || []) {
+      if (!s.alive) continue;
+      ctx.fillStyle = colorFor(pl.index);
+      ctx.beginPath(); ctx.arc(MX(s.x), MY(s.y), 2.2 * dpr, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  // viewport rectangle
+  const halfW = canvas.width / 2 / t.scale, halfH = canvas.height / 2 / t.scale;
+  ctx.strokeStyle = GOLD; ctx.lineWidth = 1.5 * dpr;
+  const rx = MX(cam.cx - halfW), ry = MY(cam.cy + halfH);
+  ctx.strokeRect(rx, ry, (2 * halfW) / fw * mw, (2 * halfH) / fh * mh);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+function drawHud2() {
+  // pan/zoom hint, lower-left
+  ctx.globalAlpha = 0.5; ctx.fillStyle = "#cfd6e6";
+  ctx.font = `${11 * dpr}px ui-sans-serif, system-ui, sans-serif`;
+  ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.fillText(cam.follow ? "drag to look · scroll to zoom" : "drag to look · scroll to zoom · dblclick to re-follow",
+    10 * dpr, canvas.height - 8 * dpr);
+  ctx.globalAlpha = 1;
+}
+
+function drawWinner() {
+  if (!data || data.status !== "win" || !data.winner) return;
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = "rgba(6,7,12,.66)"; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const win = (data.players || []).find((p) => p.handle === data.winner);
+  ctx.font = `${64 * dpr}px serif`; ctx.fillText("🏆", W / 2, H / 2 - 52 * dpr);
+  ctx.font = `900 ${Math.min(50, W / dpr / 12) * dpr}px Impact, "Arial Black", sans-serif`;
+  ctx.lineWidth = 6 * dpr; ctx.strokeStyle = "#000b";
+  ctx.strokeText(`${data.winner} WINS`, W / 2, H / 2 + 8 * dpr);
+  ctx.fillStyle = win ? colorFor(win.index) : "#fff"; ctx.fillText(`${data.winner} WINS`, W / 2, H / 2 + 8 * dpr);
+  ctx.font = `900 ${20 * dpr}px Impact, "Arial Black", sans-serif`;
+  ctx.fillStyle = "#fff"; ctx.fillText("gg ez 📈", W / 2, H / 2 + 48 * dpr);
+}
+
+// ---- main render loop ------------------------------------------------------
+
+let lastTs = 0;
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - lastTs) / 1000 || 0); lastTs = ts; pulse += dt;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (data && data.game === "line-wars") {
+    // auto-follow the action unless the viewer took manual control
+    if (cam.follow) {
+      const tgt = followTarget();
+      if (tgt) { cam.cx += (tgt.x - cam.cx) * Math.min(1, dt * 4); cam.cy += (tgt.y - cam.cy) * Math.min(1, dt * 4); clampCam(); }
+    }
+    const t = tx();
+    drawGrid(t);
+    drawObstacles(t);
+    drawShot(t);
+    drawSoldiers(t);
+    drawBursts(t);
+    drawFloats(t);
+    drawMinimap(t);
+    drawHud2();
+    drawWinner();
+
+    if (shotAnim && !shotAnim.done) {
+      shotAnim.t += dt / 0.8;
+      if (shotAnim.t >= 1) { shotAnim.t = 1; shotAnim.done = true; onShotLanded(); }
+    }
+    bursts.forEach((b) => (b.age += dt)); bursts = bursts.filter((b) => b.age < 0.9);
+    floats.forEach((f) => (f.age += dt)); floats = floats.filter((f) => f.age < 1.5);
   }
   requestAnimationFrame(frame);
+}
 
-  // ---- tiny helpers --------------------------------------------------------
-  function rrect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
-  function label(x, y, s, px, c, al) { ctx.fillStyle = c; ctx.textAlign = al || "left"; ctx.font = `700 ${px}px ui-monospace,monospace`; ctx.fillText(s, x, y); }
-  function bar(x, y, w, h, f, c) { ctx.fillStyle = "#0a1322"; rrect(x, y, w, h, h / 2); ctx.fill(); ctx.fillStyle = c; rrect(x, y, Math.max(2, w * clamp(f, 0, 1)), h, h / 2); ctx.fill(); }
-  function glow(x, y, r, c) { const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, c); g.addColorStop(1, "rgba(0,0,0,0)"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); }
-  function shadow(x, y, rx, ry, a) { ctx.fillStyle = `rgba(0,0,0,${a})`; ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, 7); ctx.fill(); }
-  function box(x, y, w, h, top, light, dark) { ctx.fillStyle = dark; ctx.fillRect(x, y + 3, w, h); ctx.fillStyle = top; ctx.fillRect(x, y, w, h); ctx.fillStyle = light; ctx.fillRect(x, y, w, 3); }
-  function gearIcon(x, y, col) { ctx.save(); ctx.translate(x, y); ctx.fillStyle = col; for (let i = 0; i < 8; i++) { ctx.rotate(Math.PI / 4); ctx.fillRect(-1.6, -6, 3.2, 3.6); } ctx.beginPath(); ctx.arc(0, 0, 4, 0, 7); ctx.fill(); ctx.fillStyle = "#7a5a10"; ctx.beginPath(); ctx.arc(0, 0, 1.6, 0, 7); ctx.fill(); ctx.restore(); }
-  function wrap(text, x, y, maxw, lh, px, c) {
-    ctx.fillStyle = c; ctx.textAlign = "left"; ctx.font = `700 ${px}px ui-monospace,monospace`;
-    const words = String(text).split(" "); let line = "", yy = y;
-    for (const w of words) { const test = line ? line + " " + w : w; if (ctx.measureText(test).width > maxw && line) { ctx.fillText(line, x, yy); line = w; yy += lh; } else line = test; }
-    if (line) ctx.fillText(line, x, yy);
+// What the camera tracks: the flying shot's muzzle during a shot, else the active shooter.
+function followTarget() {
+  if (shotAnim && !shotAnim.done && data.last_shot && data.last_shot.from)
+    return { x: data.last_shot.from[0], y: data.last_shot.from[1] };
+  if (data.shooter) return { x: data.shooter.x, y: data.shooter.y };
+  return null;
+}
+
+function onShotLanded() {
+  const sh = data && data.last_shot;
+  if (!sh) return;
+  for (const k of sh.kills || []) {
+    const pl = (data.players || [])[k.player];
+    const sol = pl && pl.soldiers && pl.soldiers[k.index];
+    if (sol) bursts.push({ x: sol.x, y: sol.y, age: 0 });
   }
-  function vignette() { const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.82); g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.5)"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
-})();
+  const list = MEMES[sh.outcome] || ["NICE"];
+  const text = list[(data.ply || 0) % list.length];
+  floats.push({ x: sh.from[0], y: sh.from[1], text, color: sh.outcome === "hit_enemy" ? GOLD : colorFor(sh.by_player) });
+  el("meme").textContent = text;
+  el("meme").style.color = sh.outcome === "hit_enemy" ? GOLD : "#fff";
+}
+
+// ---- DOM leaderboard -------------------------------------------------------
+
+function renderBoard() {
+  const players = (data.players || []).slice().sort((a, b) => b.alive - a.alive || a.index - b.index);
+  el("board").innerHTML = players.map((p) => {
+    const out = p.alive === 0, active = data.turn === p.index && data.status === "playing";
+    return `<span class="chip ${active ? "active" : ""} ${out ? "out" : ""}">
+      <span class="dot" style="color:${colorFor(p.index)}">●</span>
+      <span class="nm">${escapeHtml(p.handle)}${p.resigned ? " 🏳️" : ""}</span>
+      <span class="ct">${p.alive}/${p.total}</span></span>`;
+  }).join("");
+}
+
+function renderHud() {
+  renderBoard();
+  el("ply").textContent = "ply " + (data.ply ?? 0);
+  const sh = data.last_shot;
+  el("chalk").innerHTML = sh
+    ? `${escapeHtml(sh.by_handle)} fired&nbsp; f(x) = <b>${escapeHtml(sh.func)}</b>`
+    : `f(x) = <b>awaiting first shot…</b>`;
+  const st = el("status");
+  if (data.status === "win") st.textContent = `🏆 ${data.winner} wins`;
+  else if (data.status === "draw") st.textContent = "🤝 draw — mutual annihilation";
+  else st.textContent = `${data.turn_handle} to fire · ${data.squads_standing} squads standing`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ---- pan / zoom input ------------------------------------------------------
+
+let drag = null;
+canvas.addEventListener("pointerdown", (e) => {
+  drag = { x: e.clientX, y: e.clientY, cx: cam.cx, cy: cam.cy };
+  cam.follow = false;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const t = tx();
+  cam.cx = drag.cx - (e.clientX - drag.x) * dpr / t.scale;
+  cam.cy = drag.cy + (e.clientY - drag.y) * dpr / t.scale;
+  clampCam();
+});
+const endDrag = () => { drag = null; };
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+canvas.addEventListener("dblclick", () => { cam.follow = true; });
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const before = screenToWorld(e.clientX, e.clientY);
+  const factor = Math.exp(-e.deltaY * 0.0012);
+  cam.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, cam.zoom * factor));
+  const after = screenToWorld(e.clientX, e.clientY);
+  cam.cx += before.x - after.x; cam.cy += before.y - after.y;
+  cam.follow = false; clampCam();
+}, { passive: false });
+
+// ---- polling ---------------------------------------------------------------
+
+function ingest(next) {
+  data = next;
+  if (data.field) {
+    view = { x0: data.field.x_min, x1: data.field.x_max, y0: data.field.y_min, y1: data.field.y_max };
+    if (!cam.inited) { cam.cx = (view.x0 + view.x1) / 2; cam.cy = (view.y0 + view.y1) / 2; cam.inited = true; }
+  }
+  const sh = data.last_shot;
+  const key = sh ? `${data.ply}:${sh.outcome}:${sh.func}` : null;
+  if (key && key !== shotKey) {
+    shotKey = key;
+    const pts = (sh.points && sh.points.length >= 2) ? sh.points : [sh.from, sh.from];
+    const m = Math.max(0, Math.min(pts.length - 1, sh.muzzle_index || 0));
+    shotAnim = { points: pts, muzzle: m, color: colorFor(sh.by_player), t: 0, done: false };
+  }
+  renderHud();
+}
+
+async function poll() {
+  try {
+    const res = await fetch("./state.json", { cache: "no-store" });
+    if (res.ok) ingest(await res.json());
+    else el("status").innerHTML = `<span class="off">referee says ${res.status}</span>`;
+  } catch (e) {
+    el("status").innerHTML = `<span class="off">offline — retrying…</span>`;
+  }
+}
+
+window.addEventListener("resize", fit);
+fit();
+poll();
+setInterval(poll, 900);
+requestAnimationFrame(frame);

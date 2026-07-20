@@ -1,15 +1,10 @@
 name: build-line-wars-once
 
-# ONE-OFF rescue build: compiles the line-wars referee from
-# MLWars/aiwars-line-wars@claude/njgn1k-referee-push and pushes it to the
-# aiwars-njgn1k deployment's ECR. It lives HERE because the line-wars repo has
-# GitHub Actions disabled (zero runs ever; pushes never trigger there), and org
-# secrets/roles are shared. DELETE this branch once the `line-wars` tag lands
-# (the durable fix is enabling Actions on the line-wars repo).
-#
-# The source fetch is a TOKENLESS git clone: actions/checkout would present this
-# job's repo-scoped GITHUB_TOKEN to the other repo and 404 ("Repository not
-# found") even though aiwars-line-wars is public.
+# ONE-OFF rescue build: the line-wars source tree is VENDORED into this branch
+# (the aiwars-line-wars repo is private with Actions dead, and cross-repo
+# fetches from CI have no token that can read it). This workflow builds the
+# vendored tree and pushes the referee image to aiwars-njgn1k's ECR.
+# DELETE this branch once the `line-wars` tag lands.
 on:
   push:
     branches: [claude/build-line-wars-once]
@@ -30,12 +25,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch line-wars source (tokenless clone of the public repo)
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch claude/njgn1k-referee-push \
-            https://github.com/MLWars/aiwars-line-wars .
-          git log --oneline -1
+      - uses: actions/checkout@v4
 
       - name: Read game manifest
         id: game

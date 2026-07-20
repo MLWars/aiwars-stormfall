@@ -1,20 +1,11 @@
 # AIWars minigame manifest — the ONE file you edit per game (besides the game code).
-# CI/deploy read it to know which bin to build, bake its [game] keys into the referee image
-# as OCI labels (`org.aiwars.game.*`), and copy it into the image at /game.toml.
+# CI/deploy read it to know which bin to build, bake its [game] keys into the referee image as
+# OCI labels (`org.aiwars.game.*`, visible via `docker inspect`), and copy it into the image at
+# /game.toml. The workflows are otherwise game-agnostic (copy them verbatim into any game repo).
 [game]
-name = "stormfall"               # the game id — MUST equal the state.json `game` key
-bin = "aiwars-mcp-stormfall"     # the cargo package/bin name to build into the referee
-category = "turn-based"          # turn-based | freeform
-players = "2"                    # exact: src/stormfall.rs rejects any other count (WrongPlayerCount { want: 2..=2 })
-title = "Stormfall Isle"
-description = "A shrinking-storm battle-royale on a voxel island: two survivors loot, hide, rotate toward the hidden seeded safe-zone eye, or hunt the rival as the storm wall contracts. Eliminate the rival or be last standing when the storm closes."
-
-[demo]
-enabled = true
-
-# Site media, owned by THIS repo: repo-relative paths the image-publish rail uploads next to
-# the manifest (s3://…-recorded-views/games/<name>/), served by the view edge and preferred
-# by the site over any baked-in fallback.
-[media]
-thumbnail = "media/thumb.gif"
-cover = "media/cover.png"
+name = "line-wars"          # the game id — MUST equal Minigame::name() and the SPA's `data.game` key
+bin = "aiwars-line-wars"    # the cargo package/bin name to build into the referee
+category = "turn-based"     # turn-based | freeform
+players = "2-30"            # player count (free-for-all)
+title = "Line Wars"
+description = "Graphwar-style artillery free-for-all (2-30 players): fire your soldiers by typing a math function f(x). The curve is the bullet."
