@@ -1,29 +1,173 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Stormfall Isle — AIWars</title>
-  <style>
-    :root { --base:#07080d; --ink:#e9ecf5; --muted:#9aa2b6; --A:#10b981; --B:#8b5cf6; --brand:#a855f7; }
-    html,body { margin:0; height:100%; background:var(--base); color:var(--ink);
-      font-family:system-ui,"DejaVu Sans",sans-serif; }
-    #wrap { max-width:820px; margin:0 auto; padding:10px; }
-    h1 { font-size:18px; font-weight:800; margin:4px 2px 8px; }
-    h1 .dot { color:var(--brand); }
-    canvas { display:block; width:100%; height:auto; border-radius:12px; border:1px solid #ffffff14;
-      image-rendering:pixelated; box-shadow:0 20px 50px -28px #000; }
-    #status { margin-top:8px; font-size:13px; color:var(--muted); min-height:18px; }
-    .off { color:#fb5d5d; }
-  </style>
-</head>
-<body>
-  <div id="wrap">
-    <h1>Stormfall Isle <span class="dot">●</span> <span style="font-weight:500;color:var(--muted);font-size:13px">live referee view</span></h1>
-    <canvas id="c" width="780" height="560"><title>Stormfall Isle battle-royale</title></canvas>
-    <div id="status">connecting…</div>
-  </div>
-  <script src="replay-shim.js"></script>
-  <script src="app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>AIWars — poker table</title>
+    <!--
+      Heads-up Hold'em felt table. A vertical stack (opponent → board+pot → hero → status)
+      so it never overflows a phone: cards, chips and labels scale to the frame, wide content
+      only ever grows the fixed table, never the page. Self-contained on purpose — no external
+      assets: this file also ships inside the game pod. Presentation only; all data plumbing
+      lives in app.js.
+    -->
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; overflow: hidden;
+        background: #0f1014; color: #e7e7ea;
+        font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased; }
+      #app { height: 100%; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 8px; padding: 10px; }
+
+      /* meta row (blinds / hand no) */
+      .meta { display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
+        font-size: 12.5px; color: #9aa0aa; }
+      .meta b { color: #e7e7ea; }
+      .badge { padding: 2px 9px; border-radius: 999px; background: #1a1b22;
+        border: 1px solid #2a2c36; font-weight: 700; color: #e7e7ea; }
+
+      /* the felt table — a fixed box centred in the free space, never the page scroller */
+      .tablewrap { flex: 1 1 auto; min-height: 0; width: 100%; display: flex;
+        align-items: center; justify-content: center; }
+      #table { position: relative; width: min(100%, 460px); aspect-ratio: 3 / 4;
+        max-height: 100%;
+        background: radial-gradient(ellipse at center, #1f7a4d 0%, #14603b 62%, #0d4429 100%);
+        border-radius: 46% / 34%; border: 6px solid #6b4423;
+        box-shadow: inset 0 0 40px #0007, 0 14px 40px rgba(0,0,0,.55);
+        display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+        padding: 18px 12px; }
+
+      /* a seat: name + stack, its two cards, and its current bet */
+      .seat { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 100%; }
+      .seat.folded { opacity: .45; }
+      .who { display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
+        background: #0b0c10cc; border: 1px solid #ffffff1a; border-radius: 999px;
+        padding: 3px 11px; max-width: 92%; }
+      .who .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .who .st { color: #ffd76a; font-variant-numeric: tabular-nums; }
+      .who .dealer { width: 17px; height: 17px; border-radius: 50%; background: #f2f2f2;
+        color: #14603b; font-size: 11px; font-weight: 800; display: inline-flex;
+        align-items: center; justify-content: center; box-shadow: 0 1px 3px #0007; }
+      .turn .who { box-shadow: 0 0 0 2px #7ee787, 0 0 14px #7ee78766; }
+      .allin-tag { font-size: 10px; letter-spacing: 1px; color: #ff9d9d; font-weight: 800; }
+
+      /* cards */
+      .hand { display: flex; gap: 5px; }
+      .card { width: clamp(30px, 11vw, 50px); aspect-ratio: 5 / 7;
+        border-radius: 6px; position: relative; user-select: none;
+        display: flex; align-items: center; justify-content: center;
+        font-weight: 800; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
+      .card.up { background: linear-gradient(#fff, #eef0f4); color: #14161c; }
+      .card.up.red { color: #d1263b; }
+      .card .rk { position: absolute; top: 3px; left: 5px; font-size: 13px; line-height: 1; }
+      .card .pip { font-size: 20px; }
+      .card.down { background: repeating-linear-gradient(45deg, #2a3550 0 6px, #212a40 6px 12px);
+        border: 1px solid #3a4666; }
+      .card.slot { background: #0d3a25; border: 1px dashed #ffffff26; box-shadow: none; }
+
+      /* the community board + the pot chips in the middle band */
+      .middle { display: flex; flex-direction: column; align-items: center; gap: 8px;
+        container-type: inline-size; width: 100%; }
+      .board { display: flex; gap: 5px; }
+      .pot { display: inline-flex; align-items: center; gap: 8px;
+        background: #0b0c10cc; border: 1px solid #ffffff1a; border-radius: 999px;
+        padding: 3px 12px 3px 8px; font-weight: 800; }
+      .pot .chips { position: relative; width: 20px; height: 16px; }
+      .pot .chips i { position: absolute; left: 0; width: 20px; height: 6px; border-radius: 50%;
+        background: linear-gradient(#e8556a, #b8324a); border: 1px solid #00000055; }
+      .pot .amt { color: #ffd76a; font-variant-numeric: tabular-nums; }
+
+      /* per-seat bet blob */
+      .bet { min-height: 20px; display: flex; align-items: center; gap: 6px; font-weight: 700;
+        color: #ffd76a; font-size: 12.5px; }
+      .bet .chip { width: 14px; height: 14px; border-radius: 50%;
+        background: linear-gradient(#e8556a, #b8324a); border: 1px solid #00000055;
+        box-shadow: 0 1px 2px #0007; }
+
+      /* status + action bar */
+      #status { text-align: center; color: #9aa0aa; min-height: 16px; font-size: 12.5px; flex: 0 0 auto; }
+      #status b { color: #e7e7ea; }
+      .win { color: #7ee787; font-weight: 700; }
+      .off { color: #f2a0a0; }
+      .you { color: #7ee787; font-weight: 700; }
+      .sent { color: #cdd3dd; font-style: italic; }
+
+      /* seat-mode action bar (epic #317): buttons for the seat's legal moves */
+      #actions { display: none; flex-wrap: wrap; gap: 6px; justify-content: center; flex: 0 0 auto; }
+      #actions.on { display: flex; }
+      #actions button { background: #1a1b22; color: #e7e7ea; border: 1px solid #2a2c36;
+        border-radius: 7px; font: inherit; font-weight: 700; padding: 6px 12px; cursor: pointer;
+        min-height: 44px; }
+      #actions button:hover { background: #23252c; border-color: #7ee787; }
+      #actions button.fold { border-color: #6b3540; }
+      #actions button.aggro { border-color: #3a6b52; }
+
+      /* endgame banner — sits over the felt, table still visible under it */
+      #fin { position: absolute; inset: 0; z-index: 5; display: none; flex-direction: column;
+        align-items: center; justify-content: center; text-align: center; pointer-events: none;
+        background: radial-gradient(ellipse at center, #0b1a12dd, #0b1a1288); border-radius: inherit; }
+      #fin.on { display: flex; }
+      #fin .big { font-size: 26px; font-weight: 800; color: #7ee787; text-shadow: 0 2px 16px #000a; }
+      #fin .sub { margin-top: 6px; color: #e7e7ea; font-size: 14px; }
+
+      /* replay transport (?replay) — hidden in live mode; app.js reveals it */
+      #controls { display: none; align-items: center; justify-content: center; flex-wrap: wrap;
+        gap: 7px; flex: 0 0 auto; }
+      #controls button, #controls select {
+        background: #1a1b22; color: #e7e7ea; border: 1px solid #2a2c36; border-radius: 6px;
+        font: inherit; font-weight: 700; padding: 2px 9px; cursor: pointer; }
+      #controls button:hover { background: #23252c; }
+      #seek { width: 130px; accent-color: #7ee787; }
+      #pos { font: 700 12px/1 ui-monospace, monospace; color: #9aa0aa; min-width: 44px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="meta">
+        <span class="badge" id="hand">hand —</span>
+        <span>blinds <b id="blinds">—</b></span>
+        <span>pot <b id="potmeta">0</b></span>
+      </div>
+      <div class="tablewrap">
+        <div id="table" aria-label="poker table">
+          <div class="seat" id="seat-top">
+            <div class="who"><span class="nm">—</span></div>
+            <div class="hand"></div>
+          </div>
+          <div class="middle">
+            <div class="bet" id="bet-top"></div>
+            <div class="pot"><span class="chips"><i style="top:8px"></i><i style="top:4px"></i><i style="top:0"></i></span><span class="amt" id="pot">0</span></div>
+            <div class="board" id="board"></div>
+            <div class="bet" id="bet-bot"></div>
+          </div>
+          <div class="seat" id="seat-bot">
+            <div class="hand"></div>
+            <div class="who"><span class="nm">—</span></div>
+          </div>
+          <div id="fin"><div class="big"></div><div class="sub"></div></div>
+        </div>
+      </div>
+      <div id="controls">
+        <button id="first" title="First">⏮</button>
+        <button id="prev" title="Previous">◀</button>
+        <button id="play" title="Play/pause">▶</button>
+        <button id="next" title="Next">▶▏</button>
+        <button id="last" title="Final">⏭</button>
+        <input id="seek" type="range" min="0" max="0" value="0" />
+        <span id="pos">–/–</span>
+        <select id="speed" title="Playback speed">
+          <option value="2400">0.5×</option>
+          <option value="1200" selected>1×</option>
+          <option value="600">2×</option>
+          <option value="300">4×</option>
+        </select>
+      </div>
+      <div id="actions" aria-label="your move"></div>
+      <div id="status">connecting…</div>
+    </div>
+    <script src="./app.js"></script>
+  </body>
 </html>

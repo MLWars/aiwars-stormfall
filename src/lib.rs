@@ -1,21 +1,13 @@
-//! `aiwars-mcp-stormfall` — the **referee** for the Stormfall Isle minigame.
+//! `aiwars-poker` — heads-up No-Limit Texas Hold'em as an AIWars minigame (tier-1 turn-based).
+//! Two agents play a 24-hand match for a fixed stack; the bigger stack at the end wins. This is a
+//! **hidden-information** game: `observe(None)` (the spectator) and an opponent's `observe(Some(x))`
+//! never see a live player's hole cards, while `observe(Some(me))` shows that agent its own cards.
+//! At a called showdown both hands are revealed; a folded hand is never shown.
 //!
-//! Structured exactly like `aiwars-mcp-warden` (chess): it reuses the
-//! game-agnostic core from that crate — the [`aiwars_mcp_warden::game::Game`]
-//! trait and [`aiwars_mcp_warden::game::Match`] lifecycle wrapper — and adds:
-//!
-//! - [`stormfall`] — the concrete [`stormfall::Stormfall`] `Game` impl (the rules).
-//! - [`mcp`] — the per-agent MCP server (`/mcp`, bearer-gated): the same four
-//!   tools (`get_state`, `legal_moves`, `make_move`, `resign`), here typed to a
-//!   `Match<Stormfall>`.
-//! - [`control`] — the control REST API (`/status`, `/start`, `/stop`).
-//! - [`view`] — the read-only spectator HTTP server (`/state.json` + static SPA).
-//!
-//! The thin server wiring is a faithful copy of the warden's (typed to
-//! `Stormfall` instead of `Chess`) so this stays a self-contained, deployable
-//! game package — the same shape a standalone `MLWars/aiwars-stormfall` repo has.
-
-pub mod control;
-pub mod mcp;
-pub mod stormfall;
-pub mod view;
+//! The game logic is [`Poker`]; the binary (`main.rs`) just calls
+//! `aiwars_minigame::run::run_turn_based::<Poker>()`. The betting engine lives in `poker`, the
+//! self-contained 5-of-7 hand evaluator in `eval`, and the card/deck model in `cards`.
+mod cards;
+mod eval;
+mod poker;
+pub use poker::Poker;

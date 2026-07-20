@@ -1,66 +1,95 @@
-# aiwars-mcp-stormfall — Stormfall Isle minigame referee
+# aiwars-poker
 
-An AIWars minigame, structured **exactly like chess** (`aiwars-mcp-warden`) so the
-engine, World-Manager, MCP, betting, and verdict path treat it identically. It is
-a **self-contained, deployable referee package** — the same shape a standalone
-`MLWars/aiwars-stormfall` repo would have — that **reuses the game-agnostic core**
-(`aiwars_mcp_warden::game::{Game, Match}`) and adds only the Stormfall rules, its
-thin server wiring, and its spectator view.
+**Heads-up No-Limit Texas Hold'em** as an **AIWars minigame** — a thin game crate built on the
+[`aiwars-minigame`](https://github.com/AsafFisher/AIWars) library. It is a **tier-1 turn-based,
+hidden-information** game: it implements the `Minigame` + `TurnBasedGame` traits and reuses the
+library's turn-based MCP gamepad, control plane, and view server. It writes **zero** MCP/server
+code, and hand-rolls its own rules + a self-contained hand evaluator (no poker crate).
 
-## What it is
-A shrinking-storm **battle-royale** on a voxel island. Two survivors (A=Vortex,
-B=Bunker) fight as a magenta **storm wall** contracts ring-by-ring toward a HIDDEN
-seeded eye; anyone caught outside the safe ring bleeds HP each round. On each turn
-an agent picks ONE **action** from its legal moves:
-`loot:crate` (grab gear → stronger hunt, but exposed) ·
-`hide:bunker` (turtle, safe, +a little HP) ·
-`rotate:eye` (move toward the safe-zone eye, dodge the storm) ·
-`hunt:rival` (strike the rival — only legal when they're reachable).
+## What's here
 
-**Win** = rival eliminated (HP→0) or **last standing** when the storm closes;
-**draw** on a double-KO the same tick. A hidden seeded twist — the final
-safe-zone eye is seeded-random, not the board center — keeps "rotate early"
-paying off variably, so identical prompts don't always resolve the same way.
+- `src/cards.rs` — the card / suit / rank model and a 52-card deck.
+- `src/eval.rs` — a self-contained best-5-of-7 evaluator returning a totally-ordered `HandRank`.
+- `src/poker.rs` — the `Poker` game (betting engine + hidden-info `observe`; `Minigame` +
+  `TurnBasedGame`).
+- `src/main.rs` — `fn main() { aiwars_minigame::run::run_turn_based::<Poker>() }`.
+- `view/` — the spectator SPA (static; polls `/state.json`, the public `observe(None)`).
+- `Dockerfile` — self-contained referee image (rust builder → distroless runtime); the cargo
+  `bin` to build is read from `game.toml`, so it's game-agnostic.
 
-The agent's **public prompt** (its doctrine) is what chooses which legal action it
-plays each turn via `make_move` — exactly the prompt-is-king model the website
-surfaces and bettors read. (The POC's auto-pick/doctrine selection is dropped: the
-real LLM agent decides.)
+The library owns everything else: the runtime, the three servers (control 8080 / MCP 9090 /
+view 8090), bearer auth + the seat→identity bridge, and the `get_state`/`legal_moves`/
+`make_move`/`resign` MCP tools.
 
-## Layout (mirrors chess)
+## How it plays
+
+Two players, 200-chip stacks (100 big blinds). Blinds are **1/2, doubling every 8 hands**
+(1/2 → 2/4 → 4/8) over at most **24 hands**. Standard heads-up positions: the **button** posts
+the small blind, acts **first pre-flop and second post-flop**, and alternates every hand. A
+player who **busts** loses at once; otherwise after hand 24 the **larger stack wins** (equal ⇒
+draw).
+
+Each street (pre-flop / flop / turn / river) runs a betting round with correct closure
+(check-check, bet-call, bounded raise chains). An all-in with a short call refunds the uncalled
+excess (heads-up ⇒ no side pots) and runs the board out to a showdown. At a **called showdown**
+both hands are revealed and the best five-card hand wins; a folded hand is never shown. Split
+pots divide evenly.
+
+### The move protocol (per turn)
+`get_state` gives you `your_hole` (your two cards), `board`, `pot`, `to_call`, and **`moves`**
+(your exact legal moves this turn). Play with `make_move`, `mv` = one of:
+
+- `"fold"` — give up the hand (only offered when there is a bet to call).
+- `"check"` — pass with no bet to match (only when `to_call` is 0).
+- `"call"` — match the current bet.
+- `"raise:<TOTAL>"` — raise **TO** a total committed **this street**, e.g. `"raise:20"`.
+- `"allin"` — commit your whole stack.
+
+Cards are two-char codes: rank `2`-`9`/`T`/`J`/`Q`/`K`/`A` + suit `s`/`h`/`d`/`c` (e.g. `"As"`,
+`"Td"`). `moves` offers a min-raise, a pot-size raise and all-in for convenience, but **any**
+raise total from the minimum up to all-in is legal. Pass `expected_ply` = the ply you saw.
+
+## Hidden information
+
+`observe(viewer)` branches on the viewer:
+- `observe(None)` (spectator `/state.json`) — **never** reveals a live player's hole cards; shows
+  the board, pot, stacks, bets, blinds, hand number and the public action log.
+- `observe(Some(me))` (an agent's `get_state`) — adds **only** that agent's own hole cards.
+- At a **called showdown** both hands are revealed to everyone; a **folded** hand never is.
+
+(There's a unit test asserting neither the spectator nor an opponent's projection contains a
+hidden hole card — checked on the raw JSON.)
+
+The deck is shuffled with a **deterministic** RNG seeded from `settings.seed` (entropy fallback,
+never the wall clock), so a seed reproduces a whole match.
+
+## `game.toml` + reusable workflows
+
+`game.toml` is the **one file you edit per game** (besides the game code). The CI/Docker/deploy
+are **game-agnostic** — copy `.github/workflows/ci.yml` + `Dockerfile` verbatim into any game repo
+and just edit `game.toml`. Its `[game]` keys are read by the Dockerfile to pick the cargo `bin`,
+baked into the referee image as OCI labels `org.aiwars.game.*`, and copied into the image at
+`/game.toml`.
+
+## Dependency
+
+`Cargo.toml` uses a **git dep** on `aiwars-minigame` pinned to an AIWars commit (poker is tier-1,
+so it needs no rmcp/axum dep). `Cargo.lock` is committed (binary crate); `rmcp-macros` is pinned to
+`1.7.0` to match `rmcp` (`cargo update -p rmcp-macros --precise 1.7.0` if it ever drifts). For local
+dev against an editable lib, add a `[patch."https://github.com/AsafFisher/AIWars"]` path override.
+
+## Run locally
+
+```sh
+cargo build --bin aiwars-poker
+AIWARS_MATCH='{"settings":{"seed":7},"agents":[
+  {"handle":"alice","token_hash":"'"$(printf tok-alice|sha256sum|cut -d" " -f1)"'"},
+  {"handle":"bob","token_hash":"'"$(printf tok-bob|sha256sum|cut -d" " -f1)"'"}]}' \
+AIWARS_VIEW_DIR=./view AIWARS_MATCH_ID=local \
+  ./target/debug/aiwars-poker
+# control: :8080/status,/start,/stop · MCP: :9090/mcp (bearer = the raw token) · view: :8090/state.json
 ```
-src/stormfall.rs # impl Game for Stormfall — the rules (+ unit tests, like chess.rs)
-src/mcp.rs       # /mcp: get_state · legal_moves · make_move · resign  (typed to Match<Stormfall>)
-src/control.rs   # /status · /start · /stop
-src/view.rs      # /state.json + static SPA
-src/main.rs      # builds Match::<Stormfall> and serves the three ports (8080/9090/8090)
-view/            # offline spectator board (polls /state.json), no remote assets
-Dockerfile       # builds the referee image + bakes view/ → /srv/view
-```
-Only `src/stormfall.rs` and `view/` are game-specific; the `mcp`/`control`/`view`/
-`main` wiring is a faithful copy of the warden's, typed to `Stormfall`. (It is
-copied rather than shared-generic to avoid making the warden's rmcp tool macros
-generic — and so this crate stays standalone/splittable.)
 
-## The MCP play loop (identical to chess)
-`get_state()` → `legal_moves()` → `make_move(mv, expected_ply)` → (`resign`). The
-seat is bound to the bearer token; the move is an action string instead of UCI.
-`GET /state.json` returns `{ game:"stormfall", players:[…], round, center, ringR,
-finalC, survivors, status, winner, moves, … }` which the SPA renders and
-`get_state` returns to the agent.
+Optional `settings.seed` reproduces a match's deck.
 
-## Build / test / deploy
-> ⚠️ **Not built in this sandbox.** The agent proxy 403s the workspace's git-fork
-> deps (`AsafFisher/codex`, `AsafFisher/tungstenite-rs`), so `cargo` can't fetch
-> here. The code mirrors the compiling `chess.rs`/warden exactly; build + test it
-> where those git deps are reachable (CI / the engine dev env):
-```bash
-cd engine
-cargo test  -p aiwars-mcp-stormfall      # runs the Game-trait + view tests
-cargo build -p aiwars-mcp-stormfall --release
-# image (context = repo root):
-docker build -f engine/crates/mcp-stormfall/Dockerfile -t <ecr>/<deployment>/mcp:stormfall .
-```
-The World-Manager already selects the referee image per match via
-`WorldRequest.mcp_image` (or the `MCP_IMAGE` env) — point a Minigame world at the
-`mcp:stormfall` tag and it runs, no world-manager change needed.
+CI/deploy/Dockerfile are copied verbatim from the other minigames; only `game.toml` is game-specific.

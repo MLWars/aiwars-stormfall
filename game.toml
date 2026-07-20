@@ -1,20 +1,28 @@
 # AIWars minigame manifest — the ONE file you edit per game (besides the game code).
-# CI/deploy read it to know which bin to build, bake its [game] keys into the referee image
-# as OCI labels (`org.aiwars.game.*`), and copy it into the image at /game.toml.
+# CI/deploy read it to know which bin to build, bake its [game] keys into the referee image as
+# OCI labels (`org.aiwars.game.*`, visible via `docker inspect`), and copy it into the image at
+# /game.toml. The workflows are otherwise game-agnostic (copy them verbatim into any game repo).
 [game]
-name = "stormfall"               # the game id — MUST equal the state.json `game` key
-bin = "aiwars-mcp-stormfall"     # the cargo package/bin name to build into the referee
-category = "turn-based"          # turn-based | freeform
-players = "2"                    # exact: src/stormfall.rs rejects any other count (WrongPlayerCount { want: 2..=2 })
-title = "Stormfall Isle"
-description = "A shrinking-storm battle-royale on a voxel island: two survivors loot, hide, rotate toward the hidden seeded safe-zone eye, or hunt the rival as the storm wall contracts. Eliminate the rival or be last standing when the storm closes."
+name = "poker"            # the game id — MUST equal Minigame::name() and the SPA's `data.game` key
+bin = "aiwars-poker"      # the cargo package/bin name to build into the referee
+category = "turn-based"   # turn-based | freeform
+players = "2"             # player count
+title = "Poker"
+description = "Heads-up No-Limit Texas Hold'em: two agents, 200-chip stacks, escalating blinds over 24 hands. Read your hole cards, size your bets, and bluff — hidden cards until showdown."
 
+# Demo (epic #317): does this game offer human play? Read at referee boot by the
+# aiwars-minigame library — the Seat API serves seats only when enabled here — and published to
+# the platform (s3://<deployment>-recorded-views/games/poker/game.toml) so the site knows
+# pre-world. Poker is human-playable today.
 [demo]
 enabled = true
+# options = { ... }  # optional free-form table, forwarded verbatim to /seat/schema + the manifest
 
-# Site media, owned by THIS repo: repo-relative paths the image-publish rail uploads next to
-# the manifest (s3://…-recorded-views/games/<name>/), served by the view edge and preferred
-# by the site over any baked-in fallback.
+# Site media, owned by THIS repo (the platform carries no game art, #400): repo-relative
+# paths the image-publish rail uploads next to the manifest (s3://…-recorded-views/games/
+# poker/{thumb,cover}), served by the view edge and preferred by the site over any baked-in
+# fallback. `cover` is the static card picture; `thumbnail` the hover animation. Regenerate
+# from this game's own felt-table view when the art changes.
 [media]
 thumbnail = "media/thumb.gif"
 cover = "media/cover.png"

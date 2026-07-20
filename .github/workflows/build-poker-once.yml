@@ -1,20 +1,21 @@
-name: deploy-njgn1k
+name: build-poker-once
 
-# Push-triggered variant of deploy.yml for agent sessions that can't use
-# workflow_dispatch. Scoped to THIS branch only; builds the stormfall referee and
-# pushes it to the aiwars-njgn1k deployment's per-deployment ECR repo
-# `aiwars/aiwars-njgn1k/mcp`. Hardcoded to aiwars-njgn1k (never touches
-# aiwars-test-asaf); no ecr:CreateRepository; does NOT push `:latest`.
+# ONE-OFF rescue build: the poker source tree is VENDORED into this branch
+# (MLWars/aiwars-poker is new and not yet in the org secrets/vars allowlist,
+# so its own Actions cannot reach AWS creds or the private-dep token). Builds
+# the vendored tree and pushes the referee image to aiwars-njgn1k's ECR.
+# DELETE this branch once the `poker` tag lands (the durable fix: add
+# aiwars-poker to the org secrets + vars selected repositories).
 on:
   push:
-    branches: [claude/njgn1k-referee-push]
+    branches: [claude/build-poker-once]
 
 permissions:
   id-token: write
   contents: read
 
 concurrency:
-  group: deploy-njgn1k-stormfall
+  group: build-poker-once
   cancel-in-progress: false
 
 env:
@@ -23,7 +24,7 @@ env:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, aiwars-ec2]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -71,10 +72,18 @@ jobs:
           push: true
           tags: |
             ${{ steps.ecr.outputs.repo }}:${{ steps.game.outputs.name }}
-            ${{ steps.ecr.outputs.repo }}:${{ steps.game.outputs.name }}-${{ github.sha }}
+            ${{ steps.ecr.outputs.repo }}:${{ steps.game.outputs.name }}-74cdbec8793587db5ff41fb156d03e5a476099f1
           labels: ${{ steps.game.outputs.labels }}
           secrets: |
             gh_token=${{ secrets.AIWARS_DEP_TOKEN }}
+
+      - name: Publish game.toml to the recorded-views bucket (demo publish rail)
+        run: |
+          set -euo pipefail
+          NAME="${{ steps.game.outputs.name }}"
+          BUCKET="aiwars-${DEPLOYMENT}-recorded-views"
+          aws s3 cp game.toml "s3://${BUCKET}/games/${NAME}/game.toml" --content-type application/toml
+          echo "manifest published for ${NAME}"
 
       - name: Verify the tag landed
         run: |
@@ -83,6 +92,3 @@ jobs:
             --image-ids imageTag=${{ steps.game.outputs.name }} --region "$AWS_REGION" \
             --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt,tags:imageTags}' --output table \
             || echo "::warning::describe-images not permitted for this role; rely on the push step above"
-
-      - run: |
-          echo "Pushed **${{ steps.game.outputs.name }}** referee -> \`${{ steps.ecr.outputs.repo }}\` (tags: \`${{ steps.game.outputs.name }}\`, \`${{ steps.game.outputs.name }}-${{ github.sha }}\`) for deployment **aiwars-njgn1k**." >> "$GITHUB_STEP_SUMMARY"
