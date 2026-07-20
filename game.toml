@@ -5,6 +5,16 @@
 name = "stormfall"               # the game id — MUST equal the state.json `game` key
 bin = "aiwars-mcp-stormfall"     # the cargo package/bin name to build into the referee
 category = "turn-based"          # turn-based | freeform
-players = "2"                    # player count
+players = "2"                    # exact: src/stormfall.rs rejects any other count (WrongPlayerCount { want: 2..=2 })
 title = "Stormfall Isle"
 description = "A shrinking-storm battle-royale on a voxel island: two survivors loot, hide, rotate toward the hidden seeded safe-zone eye, or hunt the rival as the storm wall contracts. Eliminate the rival or be last standing when the storm closes."
+
+[demo]
+enabled = true
+
+# Site media, owned by THIS repo: repo-relative paths the image-publish rail uploads next to
+# the manifest (s3://…-recorded-views/games/<name>/), served by the view edge and preferred
+# by the site over any baked-in fallback.
+[media]
+thumbnail = "media/thumb.gif"
+cover = "media/cover.png"
