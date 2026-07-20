@@ -1,35 +1,30 @@
-# Stormfall referee image — mirrors engine/mcp-image/Dockerfile, building the
-# aiwars-mcp-stormfall binary and baking THIS crate's spectator SPA into /srv/view.
+# syntax=docker/dockerfile:1
+# GENERIC AIWars minigame referee image — game-agnostic; copy verbatim into any game repo.
+# The cargo bin to build is read from game.toml (`bin = "..."`), so nothing here is game-specific.
+# rust builder → distroless runtime. The aiwars-mcp-warden dep lives in the PRIVATE AIWars repo,
+# so the build fetches it via a BuildKit secret `gh_token` (a token that can read AsafFisher/AIWars).
 #
-# Build context is the repo ROOT (so both protocol/ and engine/ are in scope):
-#   docker build -f engine/crates/mcp-stormfall/Dockerfile -t <ecr>/<deployment>/mcp:stormfall .
-
-# ---- planner: capture the dependency "recipe" ----
-FROM rust:1.94-bookworm AS chef
-RUN cargo install cargo-chef --locked
+# Build: DOCKER_BUILDKIT=1 docker build --secret id=gh_token,env=AIWARS_DEP_TOKEN -t <game> .
+FROM rust:1.94-bookworm AS build
 WORKDIR /src
+COPY . /src
+RUN --mount=type=secret,id=gh_token \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    sh -eu -c '\
+      BIN="$(sed -nE "s/^[[:space:]]*bin[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\\1/p" game.toml | head -n1)"; \
+      [ -n "$BIN" ] || { echo "game.toml is missing a [game] bin = \"...\" key"; exit 1; }; \
+      if [ -s /run/secrets/gh_token ]; then \
+        git config --global url."https://x-access-token:$(cat /run/secrets/gh_token)@github.com/".insteadOf "https://github.com/"; \
+      fi; \
+      cargo build --release --bin "$BIN"; \
+      install -D "target/release/$BIN" /out/referee'
 
-FROM chef AS planner
-COPY protocol /src/protocol
-COPY engine    /src/engine
-WORKDIR /src/engine
-RUN cargo chef prepare --recipe-path /recipe.json
-
-# ---- build: compile the referee ----
-FROM chef AS build
-WORKDIR /src/engine
-COPY --from=planner /recipe.json /recipe.json
-COPY protocol/Cargo.toml /src/protocol/Cargo.toml
-RUN mkdir -p /src/protocol/src && echo '// stub' > /src/protocol/src/lib.rs
-RUN cargo chef cook --release --recipe-path /recipe.json -p aiwars-mcp-stormfall
-COPY protocol /src/protocol
-COPY engine    /src/engine
-RUN find /src/protocol/src /src/engine/crates -name '*.rs' -exec touch {} +
-RUN cargo build --release -p aiwars-mcp-stormfall
-
-# ---- runtime: distroless ----
 FROM gcr.io/distroless/cc-debian12:nonroot
-COPY --from=build /src/engine/target/release/aiwars-mcp-stormfall /usr/local/bin/aiwars-mcp-stormfall
-COPY engine/crates/mcp-stormfall/view /srv/view
+COPY --from=build /out/referee /usr/local/bin/referee
+COPY view /srv/view
+COPY game.toml /game.toml
+# The invariant referee runtime contract (the world-manager pod manifest sets no `command`):
 EXPOSE 8080 9090 8090
-ENTRYPOINT ["/usr/local/bin/aiwars-mcp-stormfall"]
+ENTRYPOINT ["/usr/local/bin/referee"]
