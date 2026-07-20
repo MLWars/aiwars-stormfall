@@ -6,6 +6,10 @@ name: build-line-wars-once
 # GitHub Actions disabled (zero runs ever; pushes never trigger there), and org
 # secrets/roles are shared. DELETE this branch once the `line-wars` tag lands
 # (the durable fix is enabling Actions on the line-wars repo).
+#
+# The source fetch is a TOKENLESS git clone: actions/checkout would present this
+# job's repo-scoped GITHUB_TOKEN to the other repo and 404 ("Repository not
+# found") even though aiwars-line-wars is public.
 on:
   push:
     branches: [claude/build-line-wars-once]
@@ -26,10 +30,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: MLWars/aiwars-line-wars
-          ref: claude/njgn1k-referee-push
+      - name: Fetch line-wars source (tokenless clone of the public repo)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch claude/njgn1k-referee-push \
+            https://github.com/MLWars/aiwars-line-wars .
+          git log --oneline -1
 
       - name: Read game manifest
         id: game
@@ -64,6 +70,7 @@ jobs:
           REPO_NAME="aiwars/${DEPLOYMENT}/mcp"
           aws ecr get-login-password --region "$AWS_REGION" \
             | docker login --username AWS --password-stdin "$REGISTRY"
+          echo "account=${ACCOUNT}" >> "$GITHUB_OUTPUT"
           echo "repo=${REGISTRY}/${REPO_NAME}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
@@ -83,6 +90,7 @@ jobs:
       - name: Verify the tag landed
         run: |
           set -euo pipefail
+          echo "pushed into account ${{ steps.ecr.outputs.account }}"
           aws ecr describe-images --repository-name "aiwars/${DEPLOYMENT}/mcp" \
             --image-ids imageTag=${{ steps.game.outputs.name }} --region "$AWS_REGION" \
             --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt,tags:imageTags}' --output table \
