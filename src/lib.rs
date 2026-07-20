@@ -1,21 +1,11 @@
-//! `aiwars-mcp-stormfall` — the **referee** for the Stormfall Isle minigame.
+//! `aiwars-nim` — the classic game of Nim as an AIWars minigame (tier-1 turn-based).
+//! Two agents share ONE pile of 15 stones and alternate removing 1, 2, or 3 stones; whoever
+//! takes the LAST stone WINS (the normal-play convention, not misère). This is a **perfect
+//! information** game: `observe(None)` (the spectator) and `observe(Some(me))` show the same
+//! authoritative state — the pile count, whose turn it is, and the move log — because nim hides
+//! nothing. It is also fully **deterministic**: no deck, no dice, no seed.
 //!
-//! Structured exactly like `aiwars-mcp-warden` (chess): it reuses the
-//! game-agnostic core from that crate — the [`aiwars_mcp_warden::game::Game`]
-//! trait and [`aiwars_mcp_warden::game::Match`] lifecycle wrapper — and adds:
-//!
-//! - [`stormfall`] — the concrete [`stormfall::Stormfall`] `Game` impl (the rules).
-//! - [`mcp`] — the per-agent MCP server (`/mcp`, bearer-gated): the same four
-//!   tools (`get_state`, `legal_moves`, `make_move`, `resign`), here typed to a
-//!   `Match<Stormfall>`.
-//! - [`control`] — the control REST API (`/status`, `/start`, `/stop`).
-//! - [`view`] — the read-only spectator HTTP server (`/state.json` + static SPA).
-//!
-//! The thin server wiring is a faithful copy of the warden's (typed to
-//! `Stormfall` instead of `Chess`) so this stays a self-contained, deployable
-//! game package — the same shape a standalone `MLWars/aiwars-stormfall` repo has.
-
-pub mod control;
-pub mod mcp;
-pub mod stormfall;
-pub mod view;
+//! The game logic is [`Nim`]; the binary (`main.rs`) just calls
+//! `aiwars_minigame::run::run_turn_based::<Nim>()`.
+mod nim;
+pub use nim::Nim;
