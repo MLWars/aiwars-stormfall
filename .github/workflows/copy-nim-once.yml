@@ -39,7 +39,7 @@ name: copy-nim-once
 
 on:
   push:
-    branches: [claude/copy-nim-once] {}
+    branches: [claude/copy-nim-once]
 
 permissions:
   id-token: write
