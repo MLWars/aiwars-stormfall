@@ -19,8 +19,14 @@
         background: #0f1014; color: #e7e7ea;
         font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         -webkit-font-smoothing: antialiased; }
-      #app { height: 100%; display: flex; flex-direction: column; align-items: center;
-        justify-content: center; gap: 10px; padding: 12px; }
+      /* A phone-width content column pinned to the left origin. Capping the width here (rather
+         than centering it in the viewport) keeps the whole UI inside the leftmost 390px REGARDLESS
+         of how wide the layout viewport actually is: some headless screenshot harnesses inflate
+         the CSS viewport (e.g. --window-size=390 yields a 500px innerWidth) and then crop to 390,
+         which would clip a viewport-centred layout. A left-origin, max-width column can't be
+         cropped, and on a real 390px phone it is simply full-width. */
+      #app { height: 100%; width: 100%; max-width: 390px; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 10px; padding: 12px; }
 
       /* meta row (stones left) */
       .meta { display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
@@ -45,8 +51,8 @@
       .pilewrap { position: relative; flex: 1 1 auto; min-height: 0; width: 100%; display: flex;
         align-items: center; justify-content: center; }
       #pile { display: flex; flex-wrap: wrap; align-content: center; justify-content: center;
-        gap: clamp(5px, 2.2vw, 12px); width: min(100%, 420px); max-height: 100%;
-        padding: 14px; border-radius: 22px;
+        gap: clamp(5px, 2.2vw, 12px); width: 100%; max-width: 100%; max-height: 100%;
+        overflow: auto; padding: 14px; border-radius: 22px;
         background: radial-gradient(ellipse at center, #1a1c24 0%, #131419 70%, #0e0f14 100%);
         border: 1px solid #262833; box-shadow: inset 0 0 30px #0007; }
       /* a stone: a rounded pebble; enters with a pop, leaves by scaling away */
@@ -61,7 +67,7 @@
 
       /* status / move log line */
       #status { text-align: center; color: #9aa0aa; min-height: 16px; font-size: 12.5px;
-        flex: 0 0 auto; max-width: 92%; }
+        flex: 0 0 auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
       #status b { color: #e7e7ea; }
       .win { color: #ffd76a; font-weight: 700; }
       .off { color: #f2a0a0; }
