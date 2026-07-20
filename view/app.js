@@ -16,6 +16,13 @@ function colorFor(i) {
   return `hsl(${((i * 137.508) % 360).toFixed(1)}, 85%, 62%)`;
 }
 
+// #220 view-name params: the site embeds live views with ?c0=Name&c1=Name…, mapping the
+// referee's seat handles (c0…cN) to real champion names. Every displayed player label goes
+// through nameOf() so viewers never see a raw seat id; it falls back to the handle itself
+// when no param is present (direct pod access, local fixtures).
+const PARAMS = new URLSearchParams(location.search);
+const nameOf = (h) => (h && /^c\d+$/.test(h) && PARAMS.get(h)) || h;
+
 const MEMES = {
   hit_enemy: ["GET REKT", "BOOM 💥", "HEADSHOT", "+1 FRAG", "CALCULATED", "MATH CHECKS OUT", "NO SCOPE", "DOUBLE KILL?"],
   friendly_fire: ["TEAM KILL 💀", "OOPS", "SKILL ISSUE", "OWN GOAL", "WHY THO", "FRIENDLY FIRE!", "BRO…"],
@@ -275,8 +282,8 @@ function drawWinner() {
   ctx.font = `${64 * dpr}px serif`; ctx.fillText("🏆", W / 2, H / 2 - 52 * dpr);
   ctx.font = `900 ${Math.min(50, W / dpr / 12) * dpr}px Impact, "Arial Black", sans-serif`;
   ctx.lineWidth = 6 * dpr; ctx.strokeStyle = "#000b";
-  ctx.strokeText(`${data.winner} WINS`, W / 2, H / 2 + 8 * dpr);
-  ctx.fillStyle = win ? colorFor(win.index) : "#fff"; ctx.fillText(`${data.winner} WINS`, W / 2, H / 2 + 8 * dpr);
+  ctx.strokeText(`${nameOf(data.winner)} WINS`, W / 2, H / 2 + 8 * dpr);
+  ctx.fillStyle = win ? colorFor(win.index) : "#fff"; ctx.fillText(`${nameOf(data.winner)} WINS`, W / 2, H / 2 + 8 * dpr);
   ctx.font = `900 ${20 * dpr}px Impact, "Arial Black", sans-serif`;
   ctx.fillStyle = "#fff"; ctx.fillText("gg ez 📈", W / 2, H / 2 + 48 * dpr);
 }
@@ -346,7 +353,7 @@ function renderBoard() {
     const out = p.alive === 0, active = data.turn === p.index && data.status === "playing";
     return `<span class="chip ${active ? "active" : ""} ${out ? "out" : ""}">
       <span class="dot" style="color:${colorFor(p.index)}">●</span>
-      <span class="nm">${escapeHtml(p.handle)}${p.resigned ? " 🏳️" : ""}</span>
+      <span class="nm">${escapeHtml(nameOf(p.handle))}${p.resigned ? " 🏳️" : ""}</span>
       <span class="ct">${p.alive}/${p.total}</span></span>`;
   }).join("");
 }
@@ -356,12 +363,12 @@ function renderHud() {
   el("ply").textContent = "ply " + (data.ply ?? 0);
   const sh = data.last_shot;
   el("chalk").innerHTML = sh
-    ? `${escapeHtml(sh.by_handle)} fired&nbsp; f(x) = <b>${escapeHtml(sh.func)}</b>`
+    ? `${escapeHtml(nameOf(sh.by_handle))} fired&nbsp; f(x) = <b>${escapeHtml(sh.func)}</b>`
     : `f(x) = <b>awaiting first shot…</b>`;
   const st = el("status");
-  if (data.status === "win") st.textContent = `🏆 ${data.winner} wins`;
+  if (data.status === "win") st.textContent = `🏆 ${nameOf(data.winner)} wins`;
   else if (data.status === "draw") st.textContent = "🤝 draw — mutual annihilation";
-  else st.textContent = `${data.turn_handle} to fire · ${data.squads_standing} squads standing`;
+  else st.textContent = `${nameOf(data.turn_handle)} to fire · ${data.squads_standing} squads standing`;
 }
 
 function escapeHtml(s) {
