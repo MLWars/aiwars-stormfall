@@ -1,0 +1,102 @@
+# copy-nim-once — ONE-OFF rescue copy of the `nim` referee image between ECR repos.
+#
+# ── WHAT / WHY ────────────────────────────────────────────────────────────────
+# games/registry.json unpinned `nim`'s `mcp_image` to null (same as the seven
+# satellites in 600a54c). The API now resolves nim's referee via the stack-relative
+# convention retag(WORLD_MCP_IMAGE, ":nim") — for the live stack that is
+#   975049987604.dkr.ecr.us-east-1.amazonaws.com/aiwars/aiwars-njgn1k/mcp:nim
+# which does NOT exist yet. This copies the working image out of the aiwars-test-asaf
+# repo (where nim was pinned) into aiwars-njgn1k's repo so nim keeps launching after
+# the unpin. Run it ONCE, before/with the `up` that ships the unpinned registry.
+#
+# ── WHERE THIS FILE LIVES ─────────────────────────────────────────────────────
+# Authored in the AIWars monorepo as `.github/copy-nim-once.yml.example` (inert — it
+# is NOT under .github/workflows/, so nothing runs it here). The orchestrator copies
+# this content to `.github/workflows/copy-nim-once.yml` on a SCRATCH branch of
+# MLWars/aiwars-stormfall (which already carries rescue-build workflows + the AWS
+# creds), runs it once via Actions → copy-nim-once → Run workflow, then deletes the
+# scratch branch.
+#
+# ── ACCOUNT / AUTH ────────────────────────────────────────────────────────────
+# Source and destination repos are the SAME AWS account (975049987604) and region
+# (us-east-1), so ONE ECR registry login covers both. Creds come from the same repo
+# vars/secrets every other deploy workflow uses (AWS_ROLE_ARN / AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY).
+#
+# ── IAM CAVEAT (read before running) ──────────────────────────────────────────
+# The copy READS aiwars/aiwars-test-asaf/mcp and WRITES aiwars/aiwars-njgn1k/mcp. If
+# the role/keys are scoped to only the njgn1k repo path, the PULL side fails with an
+# ECR authorization error, e.g.:
+#   DENIED: User ... is not authorized to perform: ecr:BatchGetImage on resource:
+#   arn:aws:ecr:us-east-1:975049987604:repository/aiwars/aiwars-test-asaf/mcp
+# (crane surfaces it as `DENIED`/`UNAUTHORIZED` on the manifests/blobs GET). If that
+# happens, widen the role's ECR read policy to include the test-asaf repo (or run the
+# copy under credentials that already hold `ecr:GetDownloadUrlForLayer` +
+# `ecr:BatchGetImage` on it), then re-run. The PUSH side needs
+# ecr:InitiateLayerUpload/UploadLayerPart/CompleteLayerUpload/PutImage on the njgn1k
+# repo, which the njgn1k deploy role already has.
+name: copy-nim-once
+
+on:
+  push:
+    branches: [claude/copy-nim-once] {}
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  REGISTRY: 975049987604.dkr.ecr.us-east-1.amazonaws.com
+  SRC: 975049987604.dkr.ecr.us-east-1.amazonaws.com/aiwars/aiwars-test-asaf/mcp:nim
+  DST: 975049987604.dkr.ecr.us-east-1.amazonaws.com/aiwars/aiwars-njgn1k/mcp:nim
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Install crane
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          ver=v0.20.2
+          curl -fsSL "https://github.com/google/go-containerregistry/releases/download/${ver}/go-containerregistry_Linux_x86_64.tar.gz" \
+            | tar -xz -C "$HOME/.local/bin" crane
+          "$HOME/.local/bin/crane" version
+
+      - name: Log in to ECR (one login covers the whole account registry)
+        run: |
+          set -euo pipefail
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | crane auth login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Copy nim referee image test-asaf -> njgn1k (manifest + layers)
+        run: |
+          set -euo pipefail
+          echo "copying $SRC"
+          echo "     -> $DST"
+          # crane copy pulls the source manifest + all layers and pushes them under the
+          # destination ref in one registry-to-registry hop — no docker daemon, and a
+          # cross-repo copy (unlike an `aws ecr put-image` manifest retag, which only
+          # works WITHIN one repo because layers are stored per-repository).
+          crane copy "$SRC" "$DST"
+
+      - name: Verify the destination tag exists
+        run: |
+          set -euo pipefail
+          aws ecr describe-images \
+            --repository-name aiwars/aiwars-njgn1k/mcp \
+            --image-ids imageTag=nim \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt,tags:imageTags,sizeBytes:imageSizeInBytes}' \
+            --output table
