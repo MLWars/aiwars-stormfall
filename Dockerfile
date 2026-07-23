@@ -5,7 +5,7 @@
 # so the build fetches it via a BuildKit secret `gh_token` (a token that can read AsafFisher/AIWars).
 #
 # Build: DOCKER_BUILDKIT=1 docker build --secret id=gh_token,env=AIWARS_DEP_TOKEN -t <game> .
-FROM rust:1.94-bookworm AS build
+FROM rust:1.95-bookworm AS build
 WORKDIR /src
 COPY . /src
 RUN --mount=type=secret,id=gh_token \
