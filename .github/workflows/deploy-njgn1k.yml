@@ -23,7 +23,9 @@ env:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, aiwars-ec2]
+    # ubuntu-latest like the newer njgn1k deploys (poker): the MLWars self-hosted
+    # runner pool does not serve public repos.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
