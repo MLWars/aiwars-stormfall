@@ -18,8 +18,8 @@ path = "src/main.rs"
 # monorepo). CI/Docker fetch it via a token (see .github/workflows/deploy-njgn1k.yml). The
 # shared `protocol` contract crate comes from the SAME repo + rev. The pinned rev is the
 # commit that contains engine/crates/mcp-warden (`aiwars_mcp_warden::game::{Game, Match}`).
-aiwars-mcp-warden = { git = "https://github.com/AsafFisher/AIWars", package = "aiwars-mcp-warden", rev = "ad9327a98c4bc8d28e0e78602a9d64c14bce298b" }
-protocol = { git = "https://github.com/AsafFisher/AIWars", package = "protocol", rev = "ad9327a98c4bc8d28e0e78602a9d64c14bce298b" }
+aiwars-mcp-warden = { git = "https://github.com/AsafFisher/AIWars", package = "aiwars-mcp-warden", rev = "656dd06f714edcb160910e5d928428fb7daf625b" }
+protocol = { git = "https://github.com/AsafFisher/AIWars", package = "protocol", rev = "656dd06f714edcb160910e5d928428fb7daf625b" }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
