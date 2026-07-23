@@ -33,12 +33,17 @@ jobs:
           set -euo pipefail
           {
             python3 - <<'PY'
-          import tomllib
-          g = tomllib.load(open("game.toml", "rb")).get("game", {})
+          import base64, tomllib
+          raw = open("game.toml", "rb").read()
+          g = tomllib.loads(raw.decode()).get("game", {})
           print(f"name={g['name']}")
           print("labels<<LBL")
           for k, v in g.items():
               print(f"org.aiwars.game.{k}={v}")
+          # The image IS the metadata channel: the whole game.toml rides on the referee
+          # image as one base64 label (base64: the `labels:` input is line-delimited),
+          # read straight from ECR by the platform API — no S3 metadata sidecar.
+          print(f"org.aiwars.game-toml-b64={base64.b64encode(raw).decode()}")
           print("LBL")
           PY
           } >> "$GITHUB_OUTPUT"
