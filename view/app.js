@@ -34,7 +34,7 @@
       const live = (e) => e.alive ? `${e.hp}hp·g${e.gear}` : "DEAD";
       statusEl.textContent = data.winner
         ? `Final — ${data.winner} wins (${data.win_reason}).`
-        : `${MODE_LABEL} · round ${data.round + 1}/${data.rounds} · ${p[0].handle} ${live(p[0])} vs ${p[1].handle} ${live(p[1])} · ${data.survivors} alive`;
+        : `${MODE_LABEL} · R${data.round + 1}/${data.rounds} · ${p[0].handle} ${live(p[0])} vs ${p[1].handle} ${live(p[1])}`;
     }
   }
   async function tick() {
@@ -256,8 +256,8 @@
     label(x + 12, y + 36, String(n), 18, "#f43f5e", "left");
     label(x + 108, y + 36, "alive", 8, "#64748b", "right");
   }
-  // top-center LIVE ODDS pill — kept clear of the HUD/survivors cards (which sit
-  // lower, at y≈46) and any other top labels.
+  // top-center LIVE ODDS pill — kept clear of the storm-cast bar sharing its row
+  // (x ≤ 262) and of the HUD/survivors cards, which sit lower at y≈46.
   function oddsPill() {
     const p = data ? data.players : [{ handle: "A" }, { handle: "B" }];
     const a = data ? clamp(data.odds_a, 0, 1) : 0.5;
@@ -271,21 +271,21 @@
     ctx.fillStyle = "#10b981"; rrect(x + 12, yy + 18, aw, 7, 3); ctx.fill();
     ctx.fillStyle = "#8b5cf6"; rrect(x + 12 + aw, yy + 18, bw - 24 - aw, 7, 3); ctx.fill();
   }
-  function dispatcher() {
-    const h = 42, y = H - h;
-    ctx.fillStyle = "rgba(5,9,16,0.92)"; ctx.fillRect(0, y, W, h);
-    ctx.strokeStyle = "rgba(168,85,247,0.45)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); ctx.stroke();
-    label(16, y + 18, "⚡ STORM-CAST", 10, "#c4b5fd", "left");
-    let line = "Two survivors on a sinking storm isle — who loots and hunts, who turtles and outlasts?";
-    if (data && !data.winner) {
-      const p = data.players;
-      line = `Round ${data.round + 1}/${data.rounds} · ${data.to_move} to act · ${p[0].name} ${p[0].alive ? p[0].hp + "hp" : "down"} vs ${p[1].name} ${p[1].alive ? p[1].hp + "hp" : "down"}.`;
-    } else if (data && data.winner) {
-      line = data.win_reason === "double" ? "Double knockout — both survivors fell the same tick. Draw."
-        : data.win_reason === "elim" ? `${data.winner} eliminates the rival — VICTORY ROYALE.`
-        : `${data.winner} takes Stormfall Isle (${data.win_reason}).`;
-    }
-    wrap(line, 118, y + 18, W - 138, 14, 12, "#e9d5ff");
+  // storm-cast: one ellipsized line in the free slot LEFT of the odds pill, in
+  // the HUD's column. No bottom band can hold it — the island's dirt skirt runs
+  // from iso(8.6,8.6).y = 512 to the canvas floor (+48 depth) — and the hp/gear
+  // and survivor counts it used to echo are already in the cards below it.
+  function stormCast() {
+    if (!data) return;
+    const x = 12, y = 7, w = 250, h = 30;
+    ctx.fillStyle = "rgba(5,9,16,0.92)"; rrect(x, y, w, h, 9); ctx.fill();
+    ctx.strokeStyle = "rgba(168,85,247,0.45)"; ctx.lineWidth = 1; rrect(x + 0.5, y + 0.5, w - 1, h - 1, 9); ctx.stroke();
+    label(x + 12, y + 20, "⚡", 12, "#c4b5fd", "left");
+    const line = data.winner
+      ? (data.win_reason === "elim" ? `${data.winner} eliminates the rival` : `${data.winner} takes the isle`)
+      : data.status === "double" ? "Double knockout — draw"
+      : `R${data.round + 1}/${data.rounds} · ${data.to_move} to act`;
+    label(x + 32, y + 20, fit(line, w - 44, 11), 11, "#e9d5ff", "left");
   }
   function finishOverlay() {
     if (!data || (!data.winner && data.status !== "double")) return;
@@ -305,11 +305,13 @@
 
   function frame(t) {
     sky(t); water(t); islandBase(); floorTiles(t);
+    // chrome before the island's occupants: if the two ever met — a name plate
+    // on the top row, say — the survivor wins the pixel.
+    hud(); survivorsBadge(); oddsPill(); stormCast();
     cratesDraw(t); bunkersDraw();
     stormWall(t);
     entsDraw(t);
     eyeMarker(t);
-    hud(); survivorsBadge(); oddsPill(); dispatcher();
     finishOverlay();
     vignette();
     requestAnimationFrame(frame);
@@ -324,11 +326,13 @@
   function shadow(x, y, rx, ry, a) { ctx.fillStyle = `rgba(0,0,0,${a})`; ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, 7); ctx.fill(); }
   function box(x, y, w, h, top, light, dark) { ctx.fillStyle = dark; ctx.fillRect(x, y + 3, w, h); ctx.fillStyle = top; ctx.fillRect(x, y, w, h); ctx.fillStyle = light; ctx.fillRect(x, y, w, 3); }
   function gearIcon(x, y, col) { ctx.save(); ctx.translate(x, y); ctx.fillStyle = col; for (let i = 0; i < 8; i++) { ctx.rotate(Math.PI / 4); ctx.fillRect(-1.6, -6, 3.2, 3.6); } ctx.beginPath(); ctx.arc(0, 0, 4, 0, 7); ctx.fill(); ctx.fillStyle = "#7a5a10"; ctx.beginPath(); ctx.arc(0, 0, 1.6, 0, 7); ctx.fill(); ctx.restore(); }
-  function wrap(text, x, y, maxw, lh, px, c) {
-    ctx.fillStyle = c; ctx.textAlign = "left"; ctx.font = `700 ${px}px ui-monospace,monospace`;
-    const words = String(text).split(" "); let line = "", yy = y;
-    for (const w of words) { const test = line ? line + " " + w : w; if (ctx.measureText(test).width > maxw && line) { ctx.fillText(line, x, yy); line = w; yy += lh; } else line = test; }
-    if (line) ctx.fillText(line, x, yy);
+  // one line, ellipsized to maxw — the cast truncates, it never wraps.
+  function fit(s, maxw, px) {
+    ctx.font = `700 ${px}px ui-monospace,monospace`;
+    if (ctx.measureText(s).width <= maxw) return s;
+    let t = s;
+    while (t.length > 1 && ctx.measureText(t + "…").width > maxw) t = t.slice(0, -1);
+    return t + "…";
   }
   function vignette() { const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.82); g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.5)"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
 })();
