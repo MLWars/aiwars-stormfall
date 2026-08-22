@@ -874,7 +874,7 @@ mod tests {
     /// Drive a whole battle-royale the way a client does, preferring the strike so it
     /// resolves decisively. It must finish with a concrete result.
     #[test]
-    fn a_full_game_resolves_to_winner_or_draw() {
+    fn a_full_game_is_settled_by_the_last_one_standing() {
         let mut m = started(7);
         let mut guard = 0;
         while !m.is_resolved() && guard < 256 {
@@ -887,13 +887,98 @@ mod tests {
                 .find(|s| *s == "hunt:rival")
                 .unwrap_or_else(|| moves[0].as_str().unwrap())
                 .to_string();
-            let _ = m.make_move(seat, &mv, ply);
+            m.make_move(seat, &mv, ply)
+                .unwrap_or_else(|e| panic!("seat {seat} playing {mv} at ply {ply}: {e}"));
             guard += 1;
         }
         assert!(m.is_resolved(), "match must resolve as the storm closes");
         let result = m.result().expect("resolved match has a result");
-        assert!(result.outcome == "Winner" || result.outcome == "Draw");
-        assert!(m.state_json()["moves"].as_array().unwrap().is_empty());
+        // The seed and the strike-first script are fixed, so the battle is fixed: assert the
+        // EXACT result. (`outcome` is only ever "Winner" or "Draw", so asserting that
+        // disjunction proves nothing — it holds with the elimination rule deleted.)
+        assert_eq!(result.outcome, "Winner");
+        assert_eq!(result.winner.as_deref(), Some("bunker"));
+        let st = m.state_json();
+        assert_eq!(st["win_reason"], "survive");
+        assert_eq!(
+            st["players"][0]["alive"], false,
+            "the loser was eliminated, not merely out-scored"
+        );
+        assert_eq!(st["players"][1]["alive"], true);
+        assert!(st["moves"].as_array().unwrap().is_empty());
+    }
+
+    /// The kill itself: a strike that takes the rival's last HP ELIMINATES it and ends the
+    /// match. (The full-game run above resolves by storm damage, so without this the whole
+    /// strike-kill branch could be deleted with every test still green.)
+    #[test]
+    fn a_strike_that_takes_the_last_hp_eliminates_the_rival() {
+        let mut g = Stormfall::new(&survivors(), &json!({ "seed": 7 })).unwrap();
+        // Close the rival to within strike range and leave it on its last point of HP.
+        g.ents[1].gx = 2;
+        g.ents[1].gy = 2;
+        g.ents[1].hp = 1;
+        g.apply(&AgentId("vortex".into()), "hunt:rival").unwrap();
+        assert_eq!(g.ents[1].hp, 0);
+        assert!(
+            !g.ents[1].alive,
+            "zero HP is elimination, not a flesh wound"
+        );
+        assert_eq!(g.win_reason, "survive");
+        assert_eq!(g.outcome(), Some(Outcome::Win(AgentId("vortex".into()))));
+    }
+
+    /// The storm is lethal, not just scary: a survivor caught OUTSIDE the ring when the wall
+    /// contracts loses HP, and losing the last of it is elimination. (The scripted run above
+    /// resolves by a strike, so without this the whole storm-damage kill could be deleted with
+    /// every test still green.)
+    #[test]
+    fn the_storm_kills_a_survivor_left_outside_the_ring() {
+        let mut g = Stormfall::new(&survivors(), &json!({ "seed": 7 })).unwrap();
+        // Strand seat 0 in the far corner on its last points of HP; seat 1 sits on the eye.
+        let (cx, cy) = g.center_at(1);
+        g.ents[0].gx = 0;
+        g.ents[0].gy = 0;
+        g.ents[0].hp = 5;
+        g.ents[1].gx = cx.round() as i32;
+        g.ents[1].gy = cy.round() as i32;
+        assert!(
+            !g.in_ring(0, 0, 1),
+            "the corner must be outside the next ring for this to test anything"
+        );
+        assert!(
+            g.in_ring(g.ents[1].gx, g.ents[1].gy, 1),
+            "the rival is safe"
+        );
+
+        // Both act, so the storm contracts to round 1 and bites.
+        g.apply(&AgentId("vortex".into()), "hide:bunker").unwrap();
+        g.apply(&AgentId("bunker".into()), "hide:bunker").unwrap();
+
+        assert!(!g.ents[0].alive, "the storm took the stranded survivor");
+        assert_eq!(g.win_reason, "survive");
+        assert_eq!(g.outcome(), Some(Outcome::Win(AgentId("bunker".into()))));
+    }
+
+    /// A FALLEN survivor stands for nothing: whatever gear it died holding, it never leads a
+    /// wall-clock timeout, and two fallen survivors name nobody. This is the guard that keeps
+    /// the platform from awarding a timed-out match to a corpse.
+    #[test]
+    fn a_fallen_survivor_never_leads() {
+        let mut g = Stormfall::new(&survivors(), &json!({ "seed": 7 })).unwrap();
+        // Seat 0 dies rich, seat 1 limps on with almost nothing.
+        g.ents[0].alive = false;
+        g.ents[0].gear = 9;
+        g.ents[1].hp = 1;
+        g.ents[1].gear = 0;
+        assert_eq!(
+            g.timeout_leader(),
+            Some(AgentId("bunker".into())),
+            "the survivor leads even though the fallen one scored higher alive"
+        );
+
+        g.ents[1].alive = false;
+        assert_eq!(g.timeout_leader(), None, "two fallen survivors name nobody");
     }
 
     #[test]
@@ -960,5 +1045,13 @@ mod tests {
         assert!(s["turn"]["moves"].as_array().unwrap().len() >= 3);
         assert_eq!(s["state"]["to_move"], "vortex");
         assert_eq!(m.seat_state(1)["turn"]["your_turn"], false);
+    }
+
+    /// The shipped game.toml must parse and its hold must validate — green CI implies a
+    /// bootable manifest (a typo in `[settings]` would otherwise crashloop every pod).
+    #[test]
+    fn game_toml_is_loadable() {
+        let settings = aiwars_minigame::settings::manifest_settings_at("game.toml").unwrap();
+        aiwars_minigame::settings::validate_hold(&settings).unwrap();
     }
 }
