@@ -1,21 +1,14 @@
-//! `aiwars-mcp-stormfall` — the **referee** for the Stormfall Isle minigame.
+//! `aiwars-mcp-stormfall` — the **referee** for the Stormfall Isle minigame (tier-1
+//! turn-based, on the shared `aiwars-minigame` library).
 //!
-//! Structured exactly like `aiwars-mcp-warden` (chess): it reuses the
-//! game-agnostic core from that crate — the [`aiwars_mcp_warden::game::Game`]
-//! trait and [`aiwars_mcp_warden::game::Match`] lifecycle wrapper — and adds:
+//! Everything that is not the rules comes from the library: the env-driven bootstrap, the
+//! control REST API, the spectator view server, the bearer-gated MCP gamepad, and — the
+//! reason for this port — the **Seat API** (`/seat/{state,move,resign,schema}`), which is
+//! what lets a HUMAN occupy a seat and actually play. None of that is game code, so this
+//! crate is just [`Stormfall`]: the isle's rules and its state projection.
 //!
-//! - [`stormfall`] — the concrete [`stormfall::Stormfall`] `Game` impl (the rules).
-//! - [`mcp`] — the per-agent MCP server (`/mcp`, bearer-gated): the same four
-//!   tools (`get_state`, `legal_moves`, `make_move`, `resign`), here typed to a
-//!   `Match<Stormfall>`.
-//! - [`control`] — the control REST API (`/status`, `/start`, `/stop`).
-//! - [`view`] — the read-only spectator HTTP server (`/state.json` + static SPA).
-//!
-//! The thin server wiring is a faithful copy of the warden's (typed to
-//! `Stormfall` instead of `Chess`) so this stays a self-contained, deployable
-//! game package — the same shape a standalone `MLWars/aiwars-stormfall` repo has.
-
-pub mod control;
-pub mod mcp;
-pub mod stormfall;
-pub mod view;
+//! Stormfall is **perfect information** — see the `observe` note in `src/stormfall.rs` for
+//! why the "hidden" storm eye is not private information — so `observe` ignores its
+//! `viewer` argument.
+mod stormfall;
+pub use stormfall::Stormfall;

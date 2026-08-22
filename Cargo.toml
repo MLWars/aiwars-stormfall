@@ -13,27 +13,11 @@ name = "aiwars-mcp-stormfall"
 path = "src/main.rs"
 
 [dependencies]
-# The game-agnostic referee CORE (Game trait + Match lifecycle) is reused as-is from the
-# PRIVATE AIWars monorepo as a GIT dependency (it was a `../mcp-warden` path dep in the
-# monorepo). CI/Docker fetch it via a token (see .github/workflows/deploy-njgn1k.yml). The
-# shared `protocol` contract crate comes from the SAME repo + rev. The pinned rev is the
-# commit that contains engine/crates/mcp-warden (`aiwars_mcp_warden::game::{Game, Match}`).
-aiwars-mcp-warden = { git = "https://github.com/AsafFisher/AIWars", package = "aiwars-mcp-warden", rev = "656dd06f714edcb160910e5d928428fb7daf625b" }
-protocol = { git = "https://github.com/AsafFisher/AIWars", package = "protocol", rev = "656dd06f714edcb160910e5d928428fb7daf625b" }
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-serde = { version = "1", features = ["derive"] }
+# Git-dep pinned to a commit of the (private) AIWars repo. Stormfall is tier-1 (it reuses the
+# turn-based gamepad, the control/view servers and the Seat API), so it needs NO rmcp/axum/
+# tokio/tower/sha2/schemars deps of its own — the library owns every server. Cargo.lock is
+# committed (an unlocked resolve floats rmcp-macros ahead of rmcp and breaks the build).
+# Same rev/shape as aiwars-poker, the reference tier-1 game.
+aiwars-minigame = { git = "https://github.com/AsafFisher/AIWars", package = "aiwars-minigame", rev = "af88d7c" }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
-axum = "0.7"
-tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "set-header", "timeout"] }
-sha2 = "0.11.0"
-hex = "0.4.3"
-schemars = "1.2.1"
-rmcp = { version = "1.7.0", features = ["server", "macros", "transport-streamable-http-server", "transport-streamable-http-server-session", "schemars", "tower"] }
-# Pin the rmcp PROC-MACRO crate to the rmcp lib version the warden's `#[tool]` handlers are
-# built against. With no committed Cargo.lock, cargo otherwise resolves it to a newer minor
-# (1.8.x) whose generated code calls rmcp-1.7-absent APIs, failing the build.
-rmcp-macros = "=1.7.0"
+anyhow = "1"
