@@ -7,6 +7,8 @@ name: deploy
 # and `:latest` (the deployment's default referee). The game name comes from game.toml.
 # Default dispatch target is the current test stack (aiwars-d3). Pass `deployment` to hit
 # another stack; d2/njgn1k stays up until Asaf turns it off. No domain. Not a public launch.
+# Runner is ubuntu-latest (same as deploy-njgn1k.yml): the org self-hosted group only includes
+# some MLWars repos, so [self-hosted, aiwars-ec2] queues forever here.
 on:
   workflow_dispatch:
     inputs:
@@ -24,7 +26,7 @@ env:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, aiwars-ec2]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
