@@ -1,0 +1,122 @@
+name: deploy
+
+# GENERIC AIWars minigame deploy — game-agnostic; copy verbatim into any game repo. Builds the
+# referee image and pushes it to ONE AIWars deployment's per-deployment ECR repo
+# `aiwars/<deployment>/mcp` (which is what that deployment's World-Manager reads as MCP_IMAGE).
+# Tags: `:<game>` + `:<game>-<sha>` (stable per-game refs the matchmaker can pin via req.mcp_image)
+# and `:latest` (the deployment's default referee). The game name comes from game.toml.
+# Default dispatch target is the current test stack (aiwars-d3). Pass `deployment` to hit
+# another stack; d2/njgn1k stays up until Asaf turns it off. No domain. Not a public launch.
+on:
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: "AIWars deployment name (the engine tf workspace / EKS cluster name)"
+        required: true
+        default: aiwars-d3
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, aiwars-ec2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read game manifest
+        id: game
+        run: |
+          set -euo pipefail
+          {
+            python3 - <<'PY'
+          import base64, tomllib
+          raw = open("game.toml", "rb").read()
+          g = tomllib.loads(raw.decode()).get("game", {})
+          print(f"name={g['name']}")
+          print("labels<<LBL")
+          for k, v in g.items():
+              print(f"org.aiwars.game.{k}={v}")
+          # The image IS the metadata channel: the whole game.toml rides on the referee
+          # image as one base64 label (base64: the `labels:` input is line-delimited),
+          # read straight from ECR by the platform API — no S3 metadata sidecar.
+          print(f"org.aiwars.game-toml-b64={base64.b64encode(raw).decode()}")
+          print("LBL")
+          PY
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Resolve the deployment's ECR repo + log in
+        id: ecr
+        run: |
+          set -euo pipefail
+          DEPLOYMENT='${{ github.event.inputs.deployment }}'
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          REPO_NAME="aiwars/${DEPLOYMENT}/mcp"
+          # Provisioned by the deployment's terraform; create-if-missing keeps this robust.
+          aws ecr describe-repositories --repository-names "$REPO_NAME" >/dev/null 2>&1 \
+            || aws ecr create-repository --repository-name "$REPO_NAME" >/dev/null
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+          echo "repo=${REGISTRY}/${REPO_NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build + push the referee image to the deployment's ECR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.repo }}:${{ steps.game.outputs.name }}
+            ${{ steps.ecr.outputs.repo }}:${{ steps.game.outputs.name }}-${{ github.sha }}
+            ${{ steps.ecr.outputs.repo }}:latest
+          labels: ${{ steps.game.outputs.labels }}
+          secrets: |
+            gh_token=${{ secrets.AIWARS_DEP_TOKEN }}
+
+      - name: Publish [media] art to the recorded-views bucket
+        run: |
+          set -euo pipefail
+          # Media publish rail (#317): the view-gateway serves these keys as the game's
+          # card art, so the site shows this game's art pre-world. Metadata (demo flag
+          # etc.) is NOT published here any more — the whole game.toml rides on the
+          # referee image as the org.aiwars.game-toml-b64 label, read straight from ECR.
+          NAME='${{ steps.game.outputs.name }}'
+          BUCKET="aiwars-${{ github.event.inputs.deployment }}-recorded-views"
+          publish_media() {
+            local field="$1" kind="$2" rel ext ct
+            rel="$(sed -nE "s/^[[:space:]]*${field}[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" game.toml | head -n1)"
+            [ -n "$rel" ] || return 0   # undeclared — nothing to publish
+            if [ ! -f "$rel" ]; then
+              echo "::warning::game.toml declares [media] ${field}=\"${rel}\" but the file is missing — SKIPPING (never fabricated)"
+              return 0
+            fi
+            ext="$(printf '%s' "${rel##*.}" | tr '[:upper:]' '[:lower:]')"
+            case "$ext" in
+              gif) ct=image/gif ;;
+              png) ct=image/png ;;
+              webp) ct=image/webp ;;
+              jpg|jpeg) ct=image/jpeg ;;
+              *) echo "::warning::unrecognized [media] extension .${ext} on ${rel} — SKIPPING"; return 0 ;;
+            esac
+            aws s3 cp "$rel" "s3://${BUCKET}/games/${NAME}/${kind}" --content-type "$ct"
+            echo "published ${rel} → s3://${BUCKET}/games/${NAME}/${kind} (${ct})"
+          }
+          publish_media thumbnail thumb
+          publish_media cover cover
+
+      - run: |
+          echo "Deployed **${{ steps.game.outputs.name }}** referee → \`${{ steps.ecr.outputs.repo }}\` (tags: \`${{ steps.game.outputs.name }}\`, \`latest\`) for deployment **${{ github.event.inputs.deployment }}**." >> "$GITHUB_STEP_SUMMARY"
